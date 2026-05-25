@@ -1,0 +1,107 @@
+# ============================================
+# Go
+# ============================================
+# Compiled binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+dist/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of `go test -coverprofile`
+*.out
+coverage.html
+coverage.txt
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependency directories (nếu dùng vendor)
+vendor/
+
+# Air (hot reload) — nếu sau này dùng
+tmp/
+.air.toml.local
+
+# ============================================
+# Database project-specific
+# ============================================
+# Data files do DB engine tạo ra khi chạy
+*.db
+*.mydb
+*.idx
+*.wal
+*.log
+data/
+*.bak
+
+# Snapshot / dump files lúc test
+testdata/output/
+testdata/tmp/
+
+# Benchmark profiles
+*.prof
+*.pprof
+cpu.out
+mem.out
+
+# ============================================
+# IDE / Editor
+# ============================================
+# VS Code
+.vscode/
+!.vscode/settings.json.example
+!.vscode/launch.json.example
+
+# JetBrains (GoLand, IntelliJ)
+.idea/
+*.iml
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+\#*\#
+.\#*
+
+# ============================================
+# OS
+# ============================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*
+
+# ============================================
+# Secrets / Config local
+# ============================================
+.env
+.env.local
+.env.*.local
+config.local.*
+*.pem
+*.key
