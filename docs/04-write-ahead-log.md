@@ -37,7 +37,7 @@ type Log struct {
 
 func (l *Log) Open() error
 func (l *Log) Close() error
-func (l *Log) Write(ent *Entry) error
+func (l *Log) Write(ent *Entry) error   // ghi xong fsync rồi mới trả về
 func (l *Log) Read(ent *Entry) (eof bool, err error)
 func (l *Log) Sync() error
 ```
@@ -60,6 +60,103 @@ Cùng lý do đó, đừng vội bọc `bufio.Reader` quanh file để replay nh
 vào bộ đệm, con trỏ thật của file sẽ nhảy quá chỗ ta đã dùng, và lần `Write` kế tiếp ghi
 sai vị trí. Muốn dùng đệm thì phải `Seek` lại đúng chỗ, hoặc mở riêng một file handle cho
 việc ghi với cờ `O_APPEND`.
+
+## Đảm bảo dữ liệu thật sự xuống đĩa
+
+### Durability nghĩa là gì
+
+**Durability** là lời hứa: dữ liệu đã ghi thì không mất. Nhưng lời hứa đó phải gắn với một
+mốc cụ thể, và mốc đó là **lúc hàm trả về thành công**.
+
+Nếu database chết *trước khi* trả về, người gọi không biết thao tác đã thành hay chưa —
+trạng thái không xác định, và điều đó chấp nhận được. Nhưng một khi `Set` đã trả `nil`,
+người gọi phải tin được rằng dù có rút điện ngay giây sau, dữ liệu vẫn còn đó.
+
+### Vì sao `Write` thôi là chưa đủ
+
+`fp.Write()` không đẩy byte xuống đĩa. Nó chỉ chép vào **page cache** của hệ điều hành,
+rồi trả về ngay. OS ghi xuống đĩa sau, theo lịch của nó.
+
+Cache này gọi là page cache vì đơn vị của nó là *page* — cùng khái niệm page với bộ nhớ ảo
+của CPU, kích thước cố định thường 4K hoặc 16K, và cũng là đơn vị IO nhỏ nhất. Đây là lý
+do nó tồn tại: gộp nhiều lần ghi nhỏ vào cùng một page thành một lần ghi đĩa, và giữ lại
+dữ liệu vừa đọc để lần sau khỏi đọc lại. (Muốn hiểu vì sao cache IO lại dính tới bộ nhớ
+ảo thì tìm hiểu `mmap`. Lưu ý tài liệu database cũng gọi node của B-tree là "page" — hai
+khái niệm khác nhau, đừng nhầm.)
+
+Chưa hết: bản thân ổ đĩa cũng có RAM cache riêng. Byte đã rời khỏi page cache vẫn có thể
+đang nằm trong cache của đĩa chứ chưa ghi lên vật lý.
+
+Muốn chắc chắn thì phải xả **hết mọi tầng cache và đợi xong**. Đó là syscall `fsync` trên
+Linux, trong Go là `Sync()` của `*os.File`. Windows có thao tác tương ứng nên `Sync()` cũng
+dùng được.
+
+```go
+func (l *Log) Write(ent *Entry) error {
+	if _, err := l.fp.Write(ent.Encode()); err != nil {
+		return err
+	}
+	return l.fp.Sync() // fsync
+}
+```
+
+Nói thêm: một số thư viện IO còn có cache riêng ở tầng ứng dụng, phải xả trước khi fsync —
+`fflush()` trong C là ví dụ. Go thì không, IO của Go ánh xạ thẳng xuống API của OS.
+
+### fsync cả thư mục cha
+
+Trên Unix có một cái bẫy: `fsync` trên file đảm bảo **nội dung** file đã xuống đĩa, nhưng
+không đảm bảo **bản thân file tồn tại**.
+
+Lý do: tên file không nằm trong file, nó nằm trong thư mục cha — một object riêng, có
+trang dirty riêng. Tạo file xong, ghi dữ liệu xong, fsync xong, nhưng mất điện trước khi
+thư mục kịp xuống đĩa: dữ liệu nằm trên đĩa mà không có cái tên nào trỏ tới nó.
+
+Vậy nên **tạo file, đổi tên file, xóa file** đều cần fsync thư mục chứa nó. Đây là chuyện
+của Unix; Windows không cần, và cũng không cho phép mở thư mục ra để sync như vậy.
+
+Thư viện chuẩn Go không có sẵn hàm fsync thư mục, nhưng `os.Open` mở được thư mục ở chế độ
+chỉ đọc và `Sync()` trên nó chính là `fsync` trên file descriptor của thư mục:
+
+```go
+//go:build unix
+
+func syncDir(name string) error {
+	dir, err := os.Open(filepath.Dir(name))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+
+	return dir.Sync()
+}
+```
+
+Bản cho Windows nằm ở file riêng với cờ `//go:build !unix` và không làm gì cả. Tách theo
+build tag là cách Go xử lý khác biệt hệ điều hành: trình biên dịch chỉ nạp file khớp với
+nền tảng đang build, nên không cần `if runtime.GOOS == ...` rải trong code.
+
+> **File descriptor.** `open` trả về một con số định danh cho file vừa mở, dùng cho mọi
+> thao tác sau đó — kể cả `fsync`. Con số đó gọi là file descriptor (fd). Nó không chỉ đại
+> diện cho file: socket mạng, thư mục, pipe đều là fd. Trên Unix mở được cả thư mục, chỉ
+> là fd đó không đọc/ghi như file thường. Mọi fd đều phải được đóng. `os.File` trong thư
+> viện chuẩn về cơ bản là lớp bọc quanh các syscall này.
+
+### Cái giá của fsync
+
+Đo trên máy dev (`BenchmarkWrite` và `BenchmarkWriteNoSync` chỉ khác nhau đúng lời gọi fsync):
+
+| | mỗi lần ghi | throughput |
+|---|---|---|
+| `Write` + fsync | ~346 µs | ~2.900 ghi/giây |
+| `Write` không fsync | ~4 µs | ~246.000 ghi/giây |
+
+**Chậm hơn 85 lần.** Đó không phải lãng phí — đó là cái giá thật của việc đợi phần cứng
+xác nhận. Nhưng nó cho thấy vì sao mọi database đều cho phép chỉnh mức độ này: Redis có
+`appendfsync always|everysec|no`, Postgres có `synchronous_commit`. Đánh đổi nằm ở chỗ
+chấp nhận mất bao nhiêu giây dữ liệu cuối cùng khi mất điện.
+
+Hiện tại mydb chọn mức an toàn nhất: fsync sau **mỗi** record.
 
 ## `KV`
 
@@ -131,10 +228,12 @@ goroutine đọc song song vẫn thoải mái.
   nghiêm trọng nhất hiện tại: sự cố *chắc chắn* sẽ xảy ra, mà cách xử lý lại là chết hẳn.
   Cách làm đúng là nhận ra record dở ở cuối, cắt file về ranh giới record tốt cuối cùng
   rồi chạy tiếp — chỉ an toàn khi đã có checksum để phân biệt "dở dang" với "hỏng thật".
-- **Không tự `Sync`.** `Write` chỉ đưa byte tới hệ điều hành, chưa chắc đã xuống đĩa vật
-  lý. Process chết thì dữ liệu còn, nhưng mất điện thì mất vài thay đổi cuối. Có sẵn
-  `Sync()` để gọi thủ công; gọi sau mỗi lần ghi thì an toàn nhất nhưng chậm đi hàng chục
-  lần. Chọn thế nào là đánh đổi, sẽ tính khi có server.
+- **fsync mỗi record nên ghi rất chậm** — khoảng 2.900 ghi/giây, so với 246.000 nếu không
+  fsync. Chưa có chế độ gộp nhiều record vào một lần fsync, cũng chưa có tùy chọn cho phép
+  người dùng chấp nhận mất vài giây dữ liệu để đổi lấy tốc độ.
+- **Đường fsync thư mục chưa chạy thật lần nào.** Máy dev là Windows nên `syncDir` luôn
+  là hàm rỗng; bản Unix mới chỉ được kiểm tra bằng cross-compile (`GOOS=linux go vet`),
+  chưa chạy trên Linux thật.
 - **Log không bao giờ nhỏ lại.** Chưa có compaction. Ghi đè cùng một key mãi thì file cứ
   lớn dần, và thời gian khởi động lớn theo kích thước file chứ không theo số key.
 - **Toàn bộ dữ liệu phải vừa trong RAM.** Log chỉ để khôi phục, mọi thao tác đọc vẫn từ

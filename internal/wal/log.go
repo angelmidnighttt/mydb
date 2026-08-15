@@ -18,8 +18,28 @@ type Log struct {
 
 // Open opens the log file, creating it if it does not exist.
 func (l *Log) Open() (err error) {
-	l.fp, err = os.OpenFile(l.FileName, os.O_RDWR|os.O_CREATE, 0o644)
+	l.fp, err = createFileSync(l.FileName)
 	return err
+}
+
+// createFileSync opens file for reading and writing, creating it if needed, and
+// makes sure the directory entry itself is on disk before returning.
+func createFileSync(file string) (*os.File, error) {
+	fp, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, err
+	}
+
+	// syncDir takes the full path and flushes the directory containing it.
+	// Passing only the base name here would flush the process's working
+	// directory instead — which is usually some other directory entirely, so the
+	// new file's name could still be lost on power failure.
+	if err := syncDir(file); err != nil {
+		fp.Close()
+		return nil, err
+	}
+
+	return fp, nil
 }
 
 // Close closes the log file.
@@ -27,13 +47,17 @@ func (l *Log) Close() error {
 	return l.fp.Close()
 }
 
-// Write appends one entry to the end of the log.
+// Write appends one entry to the end of the log and flushes it to the physical
+// disk before returning.
 //
-// The bytes reach the operating system but not necessarily the physical disk;
-// see Sync.
+// The fsync is what makes a successful return mean something: once Write
+// returns nil, the entry survives a power cut. It is also by far the slowest
+// part of a write — see BenchmarkWrite against BenchmarkWriteNoSync.
 func (l *Log) Write(ent *Entry) error {
-	_, err := l.fp.Write(ent.Encode())
-	return err
+	if _, err := l.fp.Write(ent.Encode()); err != nil {
+		return err
+	}
+	return l.fp.Sync()
 }
 
 // Read decodes the next entry. eof is true once the log is exhausted at a
@@ -49,8 +73,9 @@ func (l *Log) Read(ent *Entry) (eof bool, err error) {
 	return false, err
 }
 
-// Sync flushes the operating system's buffers to the physical disk. Without it
-// a write survives a process crash but not a power loss.
+// Sync flushes the operating system's buffers to the physical disk. Write does
+// this already; the method stays for callers that write through fp directly, or
+// for a future batched mode where Write stops syncing every record.
 func (l *Log) Sync() error {
 	return l.fp.Sync()
 }

@@ -140,6 +140,51 @@ func TestLogReadTruncated(t *testing.T) {
 	}
 }
 
+func TestCreateFileSync(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "created.log")
+
+	fp, err := createFileSync(path)
+	if err != nil {
+		t.Fatalf("createFileSync() error = %v", err)
+	}
+	defer fp.Close()
+
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("file not created: %v", err)
+	}
+	if _, err := fp.Write([]byte("writable")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+}
+
+func TestCreateFileSyncMissingDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "no-such-dir", "x.log")
+
+	fp, err := createFileSync(path)
+	if err == nil {
+		fp.Close()
+		t.Fatal("createFileSync() in a missing directory = nil, want an error")
+	}
+}
+
+// A write that returned nil must be readable after reopening the file, with no
+// flush of our own in between.
+func TestLogWriteIsDurable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "durable.log")
+
+	l := openLog(t, path)
+	ent := Entry{Key: []byte("k"), Val: []byte("v")}
+	if err := l.Write(&ent); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	// Deliberately no Close: the entry has to be on disk already.
+	got := readAll(t, openLog(t, path))
+	if len(got) != 1 || !bytes.Equal(got[0].Val, []byte("v")) {
+		t.Fatalf("replayed %v, want one entry with value \"v\"", got)
+	}
+}
+
 func TestLogSync(t *testing.T) {
 	l := openLog(t, filepath.Join(t.TempDir(), "sync.log"))
 
@@ -149,5 +194,41 @@ func TestLogSync(t *testing.T) {
 	}
 	if err := l.Sync(); err != nil {
 		t.Fatalf("Sync() error = %v", err)
+	}
+}
+
+// The two benchmarks together price durability: the only difference between
+// them is the fsync.
+func BenchmarkWrite(b *testing.B) {
+	l := &Log{FileName: filepath.Join(b.TempDir(), "bench.log")}
+	if err := l.Open(); err != nil {
+		b.Fatalf("Open() error = %v", err)
+	}
+	defer l.Close()
+
+	ent := Entry{Key: []byte("some-key"), Val: bytes.Repeat([]byte("v"), 256)}
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if err := l.Write(&ent); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkWriteNoSync(b *testing.B) {
+	l := &Log{FileName: filepath.Join(b.TempDir(), "bench.log")}
+	if err := l.Open(); err != nil {
+		b.Fatalf("Open() error = %v", err)
+	}
+	defer l.Close()
+
+	ent := Entry{Key: []byte("some-key"), Val: bytes.Repeat([]byte("v"), 256)}
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if _, err := l.fp.Write(ent.Encode()); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

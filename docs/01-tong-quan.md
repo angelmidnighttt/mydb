@@ -45,6 +45,7 @@ Xem thêm `make cover` (báo cáo coverage dạng HTML) và `make test-race`
 | KV in-memory, an toàn đa luồng | xong — [02](02-in-memory-store.md) |
 | Serialize entry thành byte | xong — [03](03-serialization.md) |
 | Ghi log xuống đĩa, replay khi khởi động | xong — [04](04-write-ahead-log.md) |
+| fsync: ghi thành công là chắc chắn không mất | xong — [04](04-write-ahead-log.md#đảm-bảo-dữ-liệu-thật-sự-xuống-đĩa) |
 | Chịu được log cắt cụt do mất điện | chưa |
 | Server + giao thức để client kết nối | chưa |
 | Compaction, on-disk format, index | chưa |
@@ -63,7 +64,10 @@ Xem thêm `make cover` (báo cáo coverage dạng HTML) và `make test-race`
 
 ## Giới hạn hiện tại
 
-Dữ liệu đã sống sót qua lần tắt chương trình, nhưng vẫn còn hai lỗ hổng lớn: **chưa kết
-nối được từ bên ngoài** (chưa có server), và **chưa chịu nổi sự cố mất điện** — một
-record ghi dở ở cuối log khiến lần khởi động sau không mở được database. Bước 1 và 2 của
-lộ trình xử lý đúng hai chuyện này.
+Ghi đã thật sự xuống đĩa (fsync), nhưng vẫn còn hai lỗ hổng lớn: **chưa kết nối được từ
+bên ngoài** (chưa có server), và **chưa chịu nổi một record ghi dở** — mất điện đúng lúc
+đang ghi thì lần khởi động sau không mở được database. Bước 1 và 2 của lộ trình xử lý đúng
+hai chuyện này.
+
+Đổi lại, tốc độ ghi hiện rất thấp (~2.900 ghi/giây) vì fsync sau mỗi record. Đó là lựa
+chọn có chủ ý: an toàn trước, nhanh sau.
