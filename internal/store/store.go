@@ -27,6 +27,15 @@ func (s *Store) Get(key string) (value []byte, ok bool) {
 	return append([]byte(nil), v...), true
 }
 
+// Has reports whether key is present, without copying its value.
+func (s *Store) Has(key string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	_, ok := s.data[key]
+	return ok
+}
+
 // Set stores value under key, overwriting any previous value.
 // The value is copied, so later mutations by the caller are not observed.
 func (s *Store) Set(key string, value []byte) {

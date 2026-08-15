@@ -28,6 +28,18 @@ func TestGetMissing(t *testing.T) {
 	}
 }
 
+func TestHas(t *testing.T) {
+	s := New()
+	s.Set("here", nil)
+
+	if !s.Has("here") {
+		t.Error("Has(here) = false, want true")
+	}
+	if s.Has("gone") {
+		t.Error("Has(gone) = true, want false")
+	}
+}
+
 func TestSetOverwrites(t *testing.T) {
 	s := New()
 	s.Set("k", []byte("old"))

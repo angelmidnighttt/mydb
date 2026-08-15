@@ -12,7 +12,7 @@ func TestEncodeLayout(t *testing.T) {
 	ent := Entry{Key: []byte("a"), Val: []byte("bb")}
 
 	got := ent.Encode()
-	want := []byte{1, 0, 0, 0, 2, 0, 0, 0, 'a', 'b', 'b'}
+	want := []byte{1, 0, 0, 0, 2, 0, 0, 0, 0, 'a', 'b', 'b'}
 
 	if !bytes.Equal(got, want) {
 		t.Fatalf("Encode() = %v, want %v", got, want)
@@ -22,23 +22,36 @@ func TestEncodeLayout(t *testing.T) {
 	}
 }
 
+func TestEncodeDeleted(t *testing.T) {
+	ent := Entry{Key: []byte("a"), Deleted: true}
+
+	got := ent.Encode()
+	want := []byte{1, 0, 0, 0, 0, 0, 0, 0, 1, 'a'}
+
+	if !bytes.Equal(got, want) {
+		t.Fatalf("Encode() = %v, want %v", got, want)
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	cases := []struct {
-		name string
-		key  []byte
-		val  []byte
+		name    string
+		key     []byte
+		val     []byte
+		deleted bool
 	}{
-		{"simple", []byte("a"), []byte("bb")},
-		{"empty key", []byte(""), []byte("value")},
-		{"empty val", []byte("key"), []byte("")},
-		{"both empty", []byte(""), []byte("")},
-		{"binary", []byte{0, 1, 2, 255}, []byte{255, 0, 128}},
-		{"long", bytes.Repeat([]byte("k"), 5000), bytes.Repeat([]byte("v"), 9000)},
+		{"simple", []byte("a"), []byte("bb"), false},
+		{"empty key", []byte(""), []byte("value"), false},
+		{"empty val", []byte("key"), []byte(""), false},
+		{"both empty", []byte(""), []byte(""), false},
+		{"binary", []byte{0, 1, 2, 255}, []byte{255, 0, 128}, false},
+		{"long", bytes.Repeat([]byte("k"), 5000), bytes.Repeat([]byte("v"), 9000), false},
+		{"tombstone", []byte("gone"), nil, true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			in := Entry{Key: tc.key, Val: tc.val}
+			in := Entry{Key: tc.key, Val: tc.val, Deleted: tc.deleted}
 
 			var out Entry
 			if err := out.Decode(bytes.NewReader(in.Encode())); err != nil {
@@ -51,7 +64,35 @@ func TestRoundTrip(t *testing.T) {
 			if !bytes.Equal(out.Val, tc.val) {
 				t.Errorf("Val = %q, want %q", out.Val, tc.val)
 			}
+			if out.Deleted != tc.deleted {
+				t.Errorf("Deleted = %v, want %v", out.Deleted, tc.deleted)
+			}
 		})
+	}
+}
+
+// The flag byte only ever holds 0 or 1. Any other value means these bytes are
+// not a record this package wrote, so decoding must stop rather than guess.
+func TestDecodeInvalidFlag(t *testing.T) {
+	data := (&Entry{Key: []byte("k"), Val: []byte("v")}).Encode()
+	data[8] = 7
+
+	var ent Entry
+	if err := ent.Decode(bytes.NewReader(data)); !errors.Is(err, ErrCorruptEntry) {
+		t.Fatalf("Decode() = %v, want ErrCorruptEntry", err)
+	}
+}
+
+// A stale entry must not leak into the next Decode.
+func TestDecodeResetsDeleted(t *testing.T) {
+	ent := Entry{Key: []byte("old"), Deleted: true}
+
+	live := (&Entry{Key: []byte("new"), Val: []byte("v")}).Encode()
+	if err := ent.Decode(bytes.NewReader(live)); err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if ent.Deleted {
+		t.Fatal("Deleted stayed true after decoding a live entry")
 	}
 }
 
@@ -100,6 +141,7 @@ func TestDecodeTruncated(t *testing.T) {
 		"header only":    headerSize,
 		"partial key":    headerSize + 2,
 		"partial val":    headerSize + 3 + 2,
+		"flag missing":   headerSize - 1,
 	}
 
 	for name, n := range cases {

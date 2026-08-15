@@ -7,6 +7,7 @@
 | 01 | [Tổng quan](01-tong-quan.md) | mydb là gì, cấu trúc thư mục, cách chạy, lộ trình |
 | 02 | [In-memory store](02-in-memory-store.md) | `internal/store` — KV trong RAM, API và các quyết định thiết kế |
 | 03 | [Serialization](03-serialization.md) | `internal/wal` — mã hóa entry thành byte, `io.Reader`/`io.Writer` |
+| 04 | [Write-ahead log](04-write-ahead-log.md) | `internal/wal` + `internal/kv` — ghi xuống đĩa, replay khi khởi động |
 
 ## Quy ước
 

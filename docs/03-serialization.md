@@ -14,17 +14,34 @@ record mà write-ahead log ở bước sau sẽ ghi xuống file.
 ## Định dạng
 
 ```
-| key size | val size | key data | val data |
-| 4 bytes  | 4 bytes  |   ...    |   ...    |
+| key size | val size | deleted | key data | val data |
+| 4 bytes  | 4 bytes  | 1 byte  |   ...    |   ...    |
 ```
 
 `key="a"`, `val="bb"` cho ra:
 
 ```
-[1 0 0 0 2 0 0 0 97 98 98]
- └───┬──┘ └───┬──┘ │  └┬─┘
- len=1    len=2   'a'  "bb"
+[1 0 0 0 2 0 0 0 0 97 98 98]
+ └───┬──┘ └───┬──┘ │  │  └┬─┘
+ len=1    len=2    │ 'a'  "bb"
+                deleted=0
 ```
+
+### Vì sao cần cờ `deleted`
+
+Log chỉ có một thao tác: nối thêm vào cuối. Không sửa, không xóa giữa file. Vậy làm sao
+ghi lại việc "xóa key này"? Bằng cách nối thêm một record nói rằng key đó đã bị xóa —
+gọi là **tombstone** (bia mộ).
+
+Khi replay, gặp record thường thì ghi vào memory, gặp tombstone thì xóa khỏi memory. Vì
+đọc theo đúng thứ tự ghi nên trạng thái cuối cùng luôn phản ánh thao tác cuối cùng.
+
+Nếu không có cờ này, xóa một key sẽ không để lại dấu vết nào trong log, và key đó sống
+lại sau mỗi lần khởi động — `TestDeleteSurvivesRestart` trong package `kv` canh đúng chỗ đó.
+
+Cờ chỉ nhận giá trị 0 hoặc 1. Giá trị khác nghĩa là những byte này không phải do ta ghi
+ra, `Decode` trả về `ErrCorruptEntry` thay vì đoán bừa — đọc tiếp sẽ diễn giải sai toàn
+bộ phần còn lại của file.
 
 ### Vì sao size phải đứng trước
 
@@ -54,6 +71,9 @@ func (ent *Entry) Encode() []byte {
 
 	binary.LittleEndian.PutUint32(data[0:4], uint32(len(ent.Key)))
 	binary.LittleEndian.PutUint32(data[4:8], uint32(len(ent.Val)))
+	if ent.Deleted {
+		data[8] = flagDeleted
+	}
 	copy(data[headerSize:], ent.Key)
 	copy(data[headerSize+len(ent.Key):], ent.Val)
 
@@ -160,8 +180,6 @@ lần gọi sau ghi đè — cùng lý do với chuyện copy value ở [02](02-
 - **Tin tuyệt đối vào size trong header.** Header hỏng báo 4 GiB thì `Decode` cấp phát
   đúng 4 GiB. Với file do chính ta ghi thì tạm chấp nhận; nhận dữ liệu từ network thì đây
   là lỗ hổng DoS, cần đặt trần kích thước.
-- **Không có kiểu record.** Chưa phân biệt được "ghi key này" với "xóa key này". Xóa cần
-  một record đánh dấu (tombstone), sẽ thêm khi làm log.
 - Key/val giới hạn 4 GiB do `uint32`. Không phải vấn đề thực tế, nhưng nên biết là có.
 - `Encode` cấp phát slice mới mỗi lần gọi. Khi ghi log tốc độ cao, nên có thêm dạng ghi
   thẳng vào `io.Writer` hoặc dùng lại buffer để bớt rác cho GC.

@@ -2,17 +2,39 @@ package main
 
 import (
 	"fmt"
+	"os"
 
-	"github.com/angelmidnighttt/mydb/internal/store"
+	"github.com/angelmidnighttt/mydb/internal/kv"
 )
 
-func main() {
-	s := store.New()
+const logFile = "mydb.log"
 
-	s.Set("hello", []byte("world"))
-	if v, ok := s.Get("hello"); ok {
-		fmt.Printf("hello = %s\n", v)
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, "mydb:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	db := &kv.KV{Path: logFile}
+	if err := db.Open(); err != nil {
+		return err
+	}
+	defer db.Close()
+
+	fmt.Printf("opened %s with %d key(s): %v\n", logFile, db.Len(), db.Keys())
+
+	updated, err := db.Set([]byte("hello"), []byte("world"))
+	if err != nil {
+		return err
+	}
+	fmt.Printf("set hello=world (updated=%v)\n", updated)
+
+	if val, ok := db.Get([]byte("hello")); ok {
+		fmt.Printf("hello = %s\n", val)
 	}
 
-	fmt.Printf("keys = %v, len = %d\n", s.Keys(), s.Len())
+	fmt.Println("run again — the key is replayed from the log instead of set fresh")
+	return nil
 }

@@ -22,6 +22,7 @@ v, ok := s.Get("hello")   // []byte("world"), true
 |---|---|---|
 | `New()` | `*Store` | store rỗng, dùng được ngay, không cần init thêm |
 | `Get(key)` | `([]byte, bool)` | `ok = false` nếu key không tồn tại; value trả về là **bản copy** |
+| `Has(key)` | `bool` | chỉ kiểm tra tồn tại, không copy value |
 | `Set(key, value)` | — | ghi đè nếu key đã có; value được **copy** khi lưu |
 | `Delete(key)` | `bool` | `true` nếu key có tồn tại trước khi xóa |
 | `Len()` | `int` | số key hiện tại |
@@ -72,7 +73,9 @@ không. Đây là ràng buộc của ngôn ngữ, không phải lựa chọn.
 
 ## Giới hạn hiện tại
 
-- **Mất sạch dữ liệu khi tắt chương trình.** Chưa có gì chạm tới đĩa.
+- **Bản thân store không chạm tới đĩa** — nó chỉ là RAM. Việc giữ dữ liệu qua các lần
+  khởi động do [`internal/kv`](04-write-ahead-log.md) lo, bằng cách ghi log rồi replay
+  vào chính store này.
 - **Chỉ chạy trong một process.** Chưa có server.
 - Chưa có TTL/expire, chưa có transaction, chưa có range scan (map không có thứ tự).
 - `Keys()` giữ read lock trong lúc copy toàn bộ danh sách key — với vài triệu key thì

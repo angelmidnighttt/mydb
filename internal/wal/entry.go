@@ -1,9 +1,11 @@
-// Package wal defines the on-disk record format for the write-ahead log.
+// Package wal implements the write-ahead log: the record format plus the file
+// it is appended to.
 //
-// An entry is serialized as a length-prefixed pair of byte strings:
+// An entry is serialized as a length-prefixed pair of byte strings, tagged with
+// a flag that says whether it records a write or a delete:
 //
-//	| key size | val size | key data | val data |
-//	| 4 bytes  | 4 bytes  |   ...    |   ...    |
+//	| key size | val size | deleted | key data | val data |
+//	| 4 bytes  | 4 bytes  | 1 byte  |   ...    |   ...    |
 //
 // Sizes are little-endian uint32 and come first, so a reader knows how many
 // bytes to pull before it has seen them.
@@ -12,16 +14,28 @@ package wal
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 )
 
-// headerSize is the fixed prefix: two uint32 lengths.
-const headerSize = 8
+// headerSize is the fixed prefix: two uint32 lengths and the delete flag.
+const headerSize = 9
 
-// Entry is a single key-value record.
+// Values of the delete flag. Anything else means the record is corrupt.
+const (
+	flagLive    byte = 0
+	flagDeleted byte = 1
+)
+
+// ErrCorruptEntry reports a record that cannot be a value this package wrote.
+var ErrCorruptEntry = errors.New("wal: corrupt entry")
+
+// Entry is a single log record: a key-value write, or a delete when Deleted is
+// set. A delete carries no value.
 type Entry struct {
-	Key []byte
-	Val []byte
+	Key     []byte
+	Val     []byte
+	Deleted bool
 }
 
 // Encode serializes the entry into a newly allocated slice.
@@ -30,6 +44,9 @@ func (ent *Entry) Encode() []byte {
 
 	binary.LittleEndian.PutUint32(data[0:4], uint32(len(ent.Key)))
 	binary.LittleEndian.PutUint32(data[4:8], uint32(len(ent.Val)))
+	if ent.Deleted {
+		data[8] = flagDeleted
+	}
 	copy(data[headerSize:], ent.Key)
 	copy(data[headerSize+len(ent.Key):], ent.Val)
 
@@ -55,6 +72,17 @@ func (ent *Entry) Decode(r io.Reader) error {
 	keySize := binary.LittleEndian.Uint32(header[0:4])
 	valSize := binary.LittleEndian.Uint32(header[4:8])
 
+	var deleted bool
+	switch header[8] {
+	case flagLive:
+	case flagDeleted:
+		deleted = true
+	default:
+		// Not a flag this package ever writes, so the bytes are not the record
+		// we think they are. Reading on would misinterpret whatever follows.
+		return fmt.Errorf("%w: delete flag = %d", ErrCorruptEntry, header[8])
+	}
+
 	key := make([]byte, keySize)
 	if err := readBody(r, key); err != nil {
 		return err
@@ -67,6 +95,7 @@ func (ent *Entry) Decode(r io.Reader) error {
 
 	ent.Key = key
 	ent.Val = val
+	ent.Deleted = deleted
 	return nil
 }
 
