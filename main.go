@@ -2,14 +2,17 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"github.com/angelmidnighttt/mydb/cmd/repl"
+
+	"github.com/angelmidnighttt/mydb/internal/store"
 )
 
 func main() {
-	cmd := repl.New()
-	cmd.StartREPL()
+	s := store.New()
 
-	fmt.Println("Goodbye!")
-	os.Exit(0)
+	s.Set("hello", []byte("world"))
+	if v, ok := s.Get("hello"); ok {
+		fmt.Printf("hello = %s\n", v)
+	}
+
+	fmt.Printf("keys = %v, len = %d\n", s.Keys(), s.Len())
 }
