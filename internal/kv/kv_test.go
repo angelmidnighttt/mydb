@@ -213,26 +213,74 @@ func TestSetCopiesValue(t *testing.T) {
 	}
 }
 
-// A damaged log must stop Open rather than come up with partial data and let
-// the next write append to a file that is already broken.
-func TestOpenRejectsCorruptLog(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "corrupt.log")
+// Losing power in the middle of a write leaves a half-record at the end of the
+// log. That write never returned success, so nothing was promised about it:
+// recovery drops it and keeps every write that did return.
+func TestOpenRecoversFromTornWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "torn.log")
 
 	db := openKV(t, path)
-	mustSet(t, db, "k", "v")
+	mustSet(t, db, "committed", "yes")
+	mustSet(t, db, "torn", "no")
+	db.Close()
+
+	// Cut the file so the last record is incomplete.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if err := os.WriteFile(path, data[:len(data)-4], 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	recovered := openKV(t, path)
+	if got, ok := mustGet(t, recovered, "committed"); !ok || got != "yes" {
+		t.Fatalf("Get(committed) = %q, %v; want \"yes\", true — an acknowledged write was lost", got, ok)
+	}
+	if _, ok := mustGet(t, recovered, "torn"); ok {
+		t.Fatal("Get(torn) = ok; a half-written record was applied")
+	}
+
+	// Recovery has to leave the log writable, not just readable.
+	mustSet(t, recovered, "after", "3")
+	recovered.Close()
+
+	final := openKV(t, path)
+	if got, ok := mustGet(t, final, "after"); !ok || got != "3" {
+		t.Fatalf("Get(after) = %q, %v; want \"3\", true — writes after recovery were lost", got, ok)
+	}
+	if final.Len() != 2 {
+		t.Fatalf("Len() = %d, want 2; keys = %v", final.Len(), final.Keys())
+	}
+}
+
+// Damage anywhere in the log stops the replay there, so a bad record in the
+// middle costs every record after it. Nothing in the format can distinguish that
+// from a torn tail — the size header of a damaged record cannot be trusted, so
+// there is no way to find where the next record would start.
+func TestOpenStopsAtDamageInTheMiddle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "damaged.log")
+
+	db := openKV(t, path)
+	mustSet(t, db, "first", "1")
+	mustSet(t, db, "second", "2")
+	mustSet(t, db, "third", "3")
 	db.Close()
 
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	if err := os.WriteFile(path, data[:len(data)-2], 0o644); err != nil {
+	data[len(data)/2] ^= 1 << 3
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	broken := &KV{Path: path}
-	if err := broken.Open(); err == nil {
-		broken.Close()
-		t.Fatal("Open() on a truncated log = nil, want an error")
+	recovered := openKV(t, path)
+	if _, ok := mustGet(t, recovered, "first"); !ok {
+		t.Fatal("Get(first) lost; records before the damage must survive")
+	}
+	if _, ok := mustGet(t, recovered, "third"); ok {
+		t.Fatal("Get(third) = ok; records past the damage are not reachable")
 	}
 }

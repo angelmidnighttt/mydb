@@ -14,18 +14,21 @@ record mà write-ahead log ở bước sau sẽ ghi xuống file.
 ## Định dạng
 
 ```
-| key size | val size | deleted | key data | val data |
-| 4 bytes  | 4 bytes  | 1 byte  |   ...    |   ...    |
+|  crc32  | key size | val size | deleted | key data | val data |
+| 4 bytes | 4 bytes  | 4 bytes  | 1 byte  |   ...    |   ...    |
 ```
 
 `key="a"`, `val="bb"` cho ra:
 
 ```
-[1 0 0 0 2 0 0 0 0 97 98 98]
- └───┬──┘ └───┬──┘ │  │  └┬─┘
- len=1    len=2    │ 'a'  "bb"
-                deleted=0
+[59 37 55 31 | 1 0 0 0 | 2 0 0 0 | 0 | 97 | 98 98]
+ └────┬────┘   └──┬──┘   └──┬──┘  ─┬─  ─┬─  └─┬─┘
+   crc32       len=1     len=2  deleted 'a'  "bb"
+      └──────────── checksum phủ toàn bộ phần này ────┘
 ```
+
+Checksum phủ **mọi thứ đứng sau nó** — cả header lẫn dữ liệu. Chi tiết vì sao cần nó nằm
+ở [04](04-write-ahead-log.md#checksum-phát-hiện-ghi-dở).
 
 ### Vì sao cần cờ `deleted`
 
@@ -69,13 +72,17 @@ Little-endian vì phần lớn CPU phổ biến (x86-64, ARM) vốn dùng nó, k
 func (ent *Entry) Encode() []byte {
 	data := make([]byte, headerSize+len(ent.Key)+len(ent.Val))
 
-	binary.LittleEndian.PutUint32(data[0:4], uint32(len(ent.Key)))
-	binary.LittleEndian.PutUint32(data[4:8], uint32(len(ent.Val)))
+	body := data[sumSize:] // phần được checksum phủ
+
+	binary.LittleEndian.PutUint32(body[0:4], uint32(len(ent.Key)))
+	binary.LittleEndian.PutUint32(body[4:8], uint32(len(ent.Val)))
 	if ent.Deleted {
-		data[8] = flagDeleted
+		body[8] = flagDeleted
 	}
-	copy(data[headerSize:], ent.Key)
-	copy(data[headerSize+len(ent.Key):], ent.Val)
+	copy(body[metaSize:], ent.Key)
+	copy(body[metaSize+len(ent.Key):], ent.Val)
+
+	binary.LittleEndian.PutUint32(data[0:sumSize], crc32.ChecksumIEEE(body))
 
 	return data
 }
@@ -132,14 +139,17 @@ if _, err := io.ReadFull(r, header[:]); err != nil {
 `TestDecodeShortReads` dùng `iotest.OneByteReader` — một reader cố tình mỗi lần chỉ trả
 đúng 1 byte — để ép lỗi này lộ ra ngay trên máy dev thay vì ngoài production.
 
-### Hai loại "hết dữ liệu"
+### Bốn loại kết thúc
 
-Phân biệt được hai trường hợp này là điều kiện để replay log an toàn:
+Phân biệt được các trường hợp này là điều kiện để replay log an toàn — mỗi loại dẫn tới
+một cách xử lý khác nhau ở [04](04-write-ahead-log.md):
 
 | Tình huống | Trả về | Ý nghĩa |
 |---|---|---|
 | Hết stream đúng ranh giới record | `io.EOF` | bình thường — đã đọc xong, dừng vòng lặp |
-| Hết stream giữa chừng một record | `io.ErrUnexpectedEOF` | **log hỏng hoặc bị cắt cụt** |
+| Hết stream giữa chừng một record | `io.ErrUnexpectedEOF` | record bị cắt cụt, ghi chưa xong |
+| Đủ byte nhưng checksum sai | `ErrBadSum` | dữ liệu không toàn vẹn |
+| Checksum đúng nhưng trường vô nghĩa | `ErrCorruptEntry` | không phải hỏng — là bug hoặc lệch format |
 
 `io.ReadFull` trả `io.EOF` khi chưa đọc được byte nào, và `io.ErrUnexpectedEOF` khi đọc
 được một phần. Nhưng có một khe hở: nếu stream kết thúc **đúng ngay sau header**, lời gọi
@@ -147,9 +157,34 @@ Phân biệt được hai trường hợp này là điều kiện để replay l
 bị cắt cụt, vì header đã hứa có key. Hàm `readBody` nâng `io.EOF` thành
 `io.ErrUnexpectedEOF` đúng cho trường hợp đó.
 
-Nếu bỏ qua chi tiết này, vòng lặp replay sẽ coi một log bị cắt cụt là log kết thúc bình
-thường và **im lặng nuốt mất phần dữ liệu hỏng**. `TestDecodeTruncated` kiểm tra cả bốn
-vị trí cắt: giữa header, ngay sau header, giữa key, giữa val.
+`TestDecodeTruncated` kiểm tra các vị trí cắt: giữa header, ngay sau header, giữa key,
+giữa val.
+
+### Kiểm checksum trước, đọc cờ sau
+
+Thứ tự này có chủ ý. Cờ `deleted` nằm trong header, nhưng **chừng nào checksum chưa khớp
+thì không có byte nào trong header đáng tin** — kể cả cái cờ đó. Nên `Decode` đọc đủ dữ
+liệu, đối chiếu checksum, rồi mới diễn giải cờ.
+
+Nhờ vậy hai lỗi tách bạch được: `ErrBadSum` là "dữ liệu hỏng", còn `ErrCorruptEntry` là
+"dữ liệu nguyên vẹn nhưng chứa giá trị package này không bao giờ ghi ra" — tức bug hoặc
+đọc nhầm format của phiên bản khác. Hai thứ đó cần xử lý khác nhau: cái đầu bỏ qua được,
+cái sau thì không.
+
+### Không tin `size` khi chưa kiểm checksum
+
+`size` đọc từ header mà header thì chưa được kiểm chứng. Một record ghi dở có thể để lại
+bất kỳ thứ gì trong bốn byte đó — kể cả `0xFFFFFFFF`, tức 4 GiB.
+
+Nếu cứ `make([]byte, size)` theo con số ấy, một file hỏng vài chục byte sẽ khiến chương
+trình cố cấp phát 4 GiB và chết vì hết bộ nhớ — **trước khi** checksum kịp nói rằng record
+đó vô giá trị. Đúng cái tình huống mà checksum sinh ra để xử lý lại thành thứ giết chương
+trình.
+
+Nên `readBody` chỉ cấp phát trước với record nhỏ (dưới 1 MiB); lớn hơn thì cho buffer lớn
+dần theo lượng byte thật sự đọc được. Record 4 GiB giả mạo trong file 100 byte chỉ cấp
+phát khoảng 100 byte rồi trả `io.ErrUnexpectedEOF`. `TestDecodeHugeSizeIsNotAllocated`
+canh chỗ này.
 
 ### Replay
 
@@ -175,11 +210,10 @@ lần gọi sau ghi đè — cùng lý do với chuyện copy value ở [02](02-
 
 ## Giới hạn hiện tại
 
-- **Không có checksum.** Một byte bị lật trên đĩa sẽ được đọc ra như dữ liệu hợp lệ,
-  không ai phát hiện. Nếu byte hỏng rơi vào phần size, `Decode` sẽ tin theo con số sai đó.
-- **Tin tuyệt đối vào size trong header.** Header hỏng báo 4 GiB thì `Decode` cấp phát
-  đúng 4 GiB. Với file do chính ta ghi thì tạm chấp nhận; nhận dữ liệu từ network thì đây
-  là lỗ hổng DoS, cần đặt trần kích thước.
+- **Checksum chỉ phát hiện, không sửa được.** Nó nói cho ta biết record hỏng, chứ không
+  khôi phục được nội dung. Muốn sửa thì cần mã sửa lỗi hoặc một bản sao khác.
+- **Không có số hiệu phiên bản format.** Đọc file của phiên bản sau sẽ báo lỗi khó hiểu
+  thay vì nói thẳng "format này mới hơn".
 - Key/val giới hạn 4 GiB do `uint32`. Không phải vấn đề thực tế, nhưng nên biết là có.
 - `Encode` cấp phát slice mới mỗi lần gọi. Khi ghi log tốc độ cao, nên có thêm dạng ghi
   thẳng vào `io.Writer` hoặc dùng lại buffer để bớt rác cho GC.

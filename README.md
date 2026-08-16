@@ -2,8 +2,8 @@
 
 Một key-value store viết từ đầu bằng Go, làm để học cách một database hoạt động bên dưới.
 
-**Trạng thái:** dữ liệu đã sống sót qua các lần khởi động lại nhờ write-ahead log. Chưa có
-network layer, và chưa chịu được log ghi dở do mất điện.
+**Trạng thái:** đã có phần lõi của một database — log + checksum + fsync. Ghi thành công
+là chắc chắn không mất, kể cả khi mất điện. Chưa có network layer.
 
 ## Cấu trúc
 
@@ -38,5 +38,5 @@ make help    # xem tất cả target
 
 ## Bước tiếp theo
 
-Chống hỏng log: thêm checksum cho từng record, và khi khởi động gặp record ghi dở ở cuối
-file thì cắt bỏ rồi chạy tiếp, thay vì từ chối mở database như hiện nay.
+Server + giao thức, để client nói chuyện với db qua network thay vì chỉ gọi hàm trong
+cùng process.

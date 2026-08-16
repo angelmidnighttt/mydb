@@ -2,8 +2,6 @@ package wal
 
 import (
 	"bytes"
-	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -114,29 +112,139 @@ func TestLogWriteAppendsAfterReplay(t *testing.T) {
 	}
 }
 
-// A log cut off mid-record is damaged, not finished. Read must say so instead of
-// reporting a clean end of file, which would silently drop the tail.
-func TestLogReadTruncated(t *testing.T) {
+// writeEntries fills a fresh log and returns its size on disk.
+func writeEntries(t *testing.T, path string, entries ...Entry) int64 {
+	t.Helper()
+
+	l := &Log{FileName: path}
+	if err := l.Open(); err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer l.Close()
+
+	var size int64
+	for i := range entries {
+		if err := l.Write(&entries[i]); err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		size += int64(entries[i].Size())
+	}
+	return size
+}
+
+// A crash can leave the last record half written. That record was never
+// acknowledged to anyone, so replay drops it and reports a clean end of log.
+func TestLogReadTornTail(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "torn.log")
 
+	good := Entry{Key: []byte("k1"), Val: []byte("v1")}
+	partial := Entry{Key: []byte("k2"), Val: []byte("v2")}
+	full := writeEntries(t, path, good, partial)
+
+	// Cut the second record in half, as a power failure mid-write would.
+	if err := os.Truncate(path, full-int64(partial.Size())/2); err != nil {
+		t.Fatalf("Truncate() error = %v", err)
+	}
+
 	l := openLog(t, path)
-	ent := Entry{Key: []byte("key"), Val: []byte("value")}
-	if err := l.Write(&ent); err != nil {
+	got := readAll(t, l)
+	if len(got) != 1 || !bytes.Equal(got[0].Key, []byte("k1")) {
+		t.Fatalf("replayed %d entries, want only the intact one", len(got))
+	}
+
+	// The torn bytes must be gone, or the next write would land after them.
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if info.Size() != int64(good.Size()) {
+		t.Fatalf("log is %d bytes after recovery, want %d", info.Size(), good.Size())
+	}
+}
+
+// The same recovery has to work when the tail is the right length but wrong
+// contents: the file grew, the data never arrived.
+func TestLogReadGarbageTail(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "garbage.log")
+
+	good := Entry{Key: []byte("k1"), Val: []byte("v1")}
+	writeEntries(t, path, good)
+
+	fp, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := fp.Write(make([]byte, 64)); err != nil { // zeroes, as a torn write leaves
+		t.Fatalf("Write() error = %v", err)
+	}
+	fp.Close()
+
+	got := readAll(t, openLog(t, path))
+	if len(got) != 1 {
+		t.Fatalf("replayed %d entries, want 1", len(got))
+	}
+
+	info, _ := os.Stat(path)
+	if info.Size() != int64(good.Size()) {
+		t.Fatalf("log is %d bytes after recovery, want %d", info.Size(), good.Size())
+	}
+}
+
+// The point of cutting the tail off: writes that come after recovery must be
+// readable by the replay after that. If the garbage stayed in the file, the next
+// replay would stop at it and lose everything written since.
+func TestLogWriteAfterTornTailRecovery(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recover.log")
+
+	good := Entry{Key: []byte("before"), Val: []byte("1")}
+	partial := Entry{Key: []byte("torn"), Val: []byte("2")}
+	full := writeEntries(t, path, good, partial)
+
+	if err := os.Truncate(path, full-3); err != nil {
+		t.Fatalf("Truncate() error = %v", err)
+	}
+
+	l := openLog(t, path)
+	readAll(t, l) // replay: drops the torn record and repairs the file
+	after := Entry{Key: []byte("after"), Val: []byte("3")}
+	if err := l.Write(&after); err != nil {
 		t.Fatalf("Write() error = %v", err)
 	}
 	l.Close()
 
-	if err := os.Truncate(path, int64(ent.Size())-3); err != nil {
-		t.Fatalf("Truncate() error = %v", err)
+	got := readAll(t, openLog(t, path))
+	if len(got) != 2 {
+		t.Fatalf("replayed %d entries, want 2", len(got))
+	}
+	if !bytes.Equal(got[1].Key, []byte("after")) {
+		t.Fatalf("second key = %q, want \"after\"", got[1].Key)
+	}
+}
+
+// A record whose bytes are all there but do not match their checksum is treated
+// the same as a torn one: it is assumed to be the interrupted tail. Nothing in
+// the format can tell the two apart, which is why damage in the middle of a log
+// costs every record after it.
+func TestLogReadStopsAtBadSum(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "middle.log")
+
+	first := Entry{Key: []byte("k1"), Val: []byte("v1")}
+	second := Entry{Key: []byte("k2"), Val: []byte("v2")}
+	third := Entry{Key: []byte("k3"), Val: []byte("v3")}
+	writeEntries(t, path, first, second, third)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	data[first.Size()+headerSize+1] ^= 1 << 3 // flip a bit inside the second key
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	var got Entry
-	eof, err := openLog(t, path).Read(&got)
-	if eof {
-		t.Fatal("Read() on a truncated record = eof, want an error")
-	}
-	if !errors.Is(err, io.ErrUnexpectedEOF) {
-		t.Fatalf("Read() = %v, want io.ErrUnexpectedEOF", err)
+	got := readAll(t, openLog(t, path))
+	if len(got) != 1 {
+		t.Fatalf("replayed %d entries, want 1 — the third is unreachable past the damage", len(got))
 	}
 }
 

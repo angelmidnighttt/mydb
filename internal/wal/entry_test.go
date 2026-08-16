@@ -2,17 +2,28 @@ package wal
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
+	"fmt"
+	"hash/crc32"
 	"io"
 	"testing"
 	"testing/iotest"
 )
 
+// The byte layout is the file format, so it is pinned literally: crc32 of
+// everything that follows it, then the sizes, the flag, and the data.
 func TestEncodeLayout(t *testing.T) {
 	ent := Entry{Key: []byte("a"), Val: []byte("bb")}
 
 	got := ent.Encode()
-	want := []byte{1, 0, 0, 0, 2, 0, 0, 0, 0, 'a', 'b', 'b'}
+	want := []byte{
+		59, 37, 55, 31, // crc32 of the bytes below, little-endian
+		1, 0, 0, 0, // key size
+		2, 0, 0, 0, // val size
+		0,             // not deleted
+		'a', 'b', 'b', // key, then val
+	}
 
 	if !bytes.Equal(got, want) {
 		t.Fatalf("Encode() = %v, want %v", got, want)
@@ -26,10 +37,64 @@ func TestEncodeDeleted(t *testing.T) {
 	ent := Entry{Key: []byte("a"), Deleted: true}
 
 	got := ent.Encode()
-	want := []byte{1, 0, 0, 0, 0, 0, 0, 0, 1, 'a'}
+	want := []byte{199, 99, 230, 47, 1, 0, 0, 0, 0, 0, 0, 0, 1, 'a'}
 
 	if !bytes.Equal(got, want) {
 		t.Fatalf("Encode() = %v, want %v", got, want)
+	}
+}
+
+// No single flipped bit anywhere in a record may pass as valid data.
+//
+// Which error comes back depends on where the bit was: damage inside a size
+// field makes the record claim a length the data no longer matches, so the read
+// runs out first and reports a truncated record. Either way the record is
+// rejected, and Log.Read treats both the same.
+func TestDecodeDetectsFlippedBit(t *testing.T) {
+	data := (&Entry{Key: []byte("key"), Val: []byte("value")}).Encode()
+
+	for i := range data {
+		t.Run(fmt.Sprintf("byte %d", i), func(t *testing.T) {
+			damaged := bytes.Clone(data)
+			damaged[i] ^= 1 << 3
+
+			var ent Entry
+			err := ent.Decode(bytes.NewReader(damaged))
+			if !errors.Is(err, ErrBadSum) && !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("Decode() with byte %d flipped = %v, want ErrBadSum or io.ErrUnexpectedEOF", i, err)
+			}
+		})
+	}
+}
+
+// A record can be complete and match its checksum yet still hold a field this
+// package would never write. That is not damage, so it is not ErrBadSum.
+func TestDecodeValidSumInvalidFlag(t *testing.T) {
+	body := []byte{1, 0, 0, 0, 1, 0, 0, 0, 7, 'k', 'v'} // flag = 7
+
+	data := make([]byte, 0, sumSize+len(body))
+	data = binary.LittleEndian.AppendUint32(data, crc32.ChecksumIEEE(body))
+	data = append(data, body...)
+
+	var ent Entry
+	err := ent.Decode(bytes.NewReader(data))
+	if !errors.Is(err, ErrCorruptEntry) {
+		t.Fatalf("Decode() = %v, want ErrCorruptEntry", err)
+	}
+	if errors.Is(err, ErrBadSum) {
+		t.Fatal("a valid checksum was reported as a bad one")
+	}
+}
+
+// A header claiming far more data than the file holds must not be allocated on
+// faith — the checksum has not been verified at that point.
+func TestDecodeHugeSizeIsNotAllocated(t *testing.T) {
+	data := make([]byte, headerSize+4)
+	binary.LittleEndian.PutUint32(data[sumSize:], 0xFFFFFFFF) // key size: 4 GiB
+
+	var ent Entry
+	if err := ent.Decode(bytes.NewReader(data)); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("Decode() = %v, want io.ErrUnexpectedEOF", err)
 	}
 }
 
@@ -68,18 +133,6 @@ func TestRoundTrip(t *testing.T) {
 				t.Errorf("Deleted = %v, want %v", out.Deleted, tc.deleted)
 			}
 		})
-	}
-}
-
-// The flag byte only ever holds 0 or 1. Any other value means these bytes are
-// not a record this package wrote, so decoding must stop rather than guess.
-func TestDecodeInvalidFlag(t *testing.T) {
-	data := (&Entry{Key: []byte("k"), Val: []byte("v")}).Encode()
-	data[8] = 7
-
-	var ent Entry
-	if err := ent.Decode(bytes.NewReader(data)); !errors.Is(err, ErrCorruptEntry) {
-		t.Fatalf("Decode() = %v, want ErrCorruptEntry", err)
 	}
 }
 

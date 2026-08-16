@@ -23,7 +23,7 @@ func Example() {
 	fmt.Printf("%s = %s\n", decoded.Key, decoded.Val)
 
 	// Output:
-	// [1 0 0 0 2 0 0 0 0 97 98 98]
+	// [59 37 55 31 1 0 0 0 2 0 0 0 0 97 98 98]
 	// a = bb
 }
 
@@ -33,7 +33,7 @@ func ExampleEntry_deleted() {
 	fmt.Println(ent.Encode())
 
 	// Output:
-	// [1 0 0 0 0 0 0 0 1 97]
+	// [199 99 230 47 1 0 0 0 0 0 0 0 1 97]
 }
 
 // Entries sit back to back in the log, so replaying it is a loop that decodes

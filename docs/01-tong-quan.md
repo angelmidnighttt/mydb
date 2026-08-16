@@ -46,28 +46,31 @@ Xem thêm `make cover` (báo cáo coverage dạng HTML) và `make test-race`
 | Serialize entry thành byte | xong — [03](03-serialization.md) |
 | Ghi log xuống đĩa, replay khi khởi động | xong — [04](04-write-ahead-log.md) |
 | fsync: ghi thành công là chắc chắn không mất | xong — [04](04-write-ahead-log.md#đảm-bảo-dữ-liệu-thật-sự-xuống-đĩa) |
-| Chịu được log cắt cụt do mất điện | chưa |
+| Checksum + khôi phục sau khi mất điện | xong — [04](04-write-ahead-log.md#ghi-dở-torn-write) |
 | Server + giao thức để client kết nối | chưa |
 | Compaction, on-disk format, index | chưa |
 
+Tới đây database đã có đủ **log + checksum + fsync**, tức là phần lõi: khởi động lại sau
+khi mất điện vẫn giữ nguyên mọi lần ghi đã báo thành công.
+
 ## Lộ trình
 
-1. **Chống hỏng log.** Thêm checksum cho từng record, và khi khởi động gặp record dở dang
-   ở cuối file thì cắt bỏ rồi chạy tiếp thay vì từ chối mở. Hiện tại một lần mất điện
-   đúng lúc ghi là database không lên lại được — xem phần giới hạn của
-   [04](04-write-ahead-log.md).
-2. **Server + giao thức.** Cho client nói chuyện với db qua network, thay vì chỉ gọi hàm
+1. **Server + giao thức.** Cho client nói chuyện với db qua network, thay vì chỉ gọi hàm
    trong cùng process.
-3. **Compaction.** Log chỉ nối thêm nên nó phình mãi; key ghi đè 1000 lần thì có 1000 bản
+2. **Compaction.** Log chỉ nối thêm nên nó phình mãi; key ghi đè 1000 lần thì có 1000 bản
    ghi mà chỉ 1 bản còn giá trị. Cần dọn định kỳ.
-4. **On-disk format + index.** Bỏ giả định "toàn bộ dữ liệu vừa trong RAM".
+3. **On-disk format + index.** Bỏ giả định "toàn bộ dữ liệu vừa trong RAM". Khi có cấu
+   trúc dữ liệu trên đĩa thì atomicity và durability phải tính lại từ đầu — log một record
+   là chuyện dễ, giữ nguyên tính nhất quán của cả một B-tree lại là chuyện khác.
 
 ## Giới hạn hiện tại
 
-Ghi đã thật sự xuống đĩa (fsync), nhưng vẫn còn hai lỗ hổng lớn: **chưa kết nối được từ
-bên ngoài** (chưa có server), và **chưa chịu nổi một record ghi dở** — mất điện đúng lúc
-đang ghi thì lần khởi động sau không mở được database. Bước 1 và 2 của lộ trình xử lý đúng
-hai chuyện này.
+Phần durability đã xong, nhưng **chưa kết nối được từ bên ngoài** — vẫn phải gọi hàm
+trong cùng process, chưa có server. Đó là bước 1 của lộ trình.
 
-Đổi lại, tốc độ ghi hiện rất thấp (~2.900 ghi/giây) vì fsync sau mỗi record. Đó là lựa
-chọn có chủ ý: an toàn trước, nhanh sau.
+Tốc độ ghi hiện rất thấp (~2.900 ghi/giây) vì fsync sau mỗi record. Đó là lựa chọn có chủ
+ý: an toàn trước, nhanh sau.
+
+Và một điểm yếu còn lại: hỏng dữ liệu ở **giữa** log làm mất mọi record phía sau, không
+chỉ record hỏng. Format hiện tại không tránh được — xem
+[04](04-write-ahead-log.md#cái-checksum-không-làm-được).

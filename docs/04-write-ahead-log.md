@@ -158,6 +158,115 @@ chấp nhận mất bao nhiêu giây dữ liệu cuối cùng khi mất điện.
 
 Hiện tại mydb chọn mức an toàn nhất: fsync sau **mỗi** record.
 
+## Ghi dở: torn write
+
+fsync giải quyết chuyện "dữ liệu có xuống đĩa không". Còn một câu hỏi nữa: khi ghi một
+record 1000 byte mà mất điện giữa chừng thì file trông như thế nào?
+
+Ta muốn record hoặc **được ghi trọn vẹn, hoặc không có gì cả** — tính chất đó gọi là
+**atomicity**. Nhưng thao tác ghi file **không hề đảm bảo** điều đó khi mất điện. Không
+chỉ dữ liệu ghi thiếu, mà ngay cả kích thước file cũng có thể sai. Nối thêm 1000 byte có
+thể cho ra:
+
+- file tăng đúng 1000 byte, nhưng dữ liệu chưa ghi hết;
+- file tăng đúng 1000 byte, không có dữ liệu nào được ghi, chỗ trống toàn `0x00` hoặc rác;
+- file chỉ tăng 500 byte.
+
+Hiện tượng này gọi là **torn write** (ghi rách). Điểm mấu chốt: **chỉ record cuối cùng bị
+ảnh hưởng**, mọi record đã fsync thành công trước đó vẫn nguyên vẹn. Đây là thêm một lý do
+nữa để database dùng log — hỏng thì hỏng ở đuôi, phần thân không bị đụng tới.
+
+### Atomicity ở tầng phần cứng
+
+CPU có các lệnh đọc/ghi bộ nhớ atomic cho dữ liệu cỡ một số nguyên. Nhưng đó là atomic
+cho **tương tranh**; ở đây ta cần atomic cho **lưu trữ khi mất điện** — hai chuyện khác nhau.
+
+Ở tầng phần cứng, ghi trọn **một sector** thường là atomic. Sector là đơn vị đọc/ghi nhỏ
+nhất của đĩa, thường 512B hoặc 4K.
+
+Nhiều hệ thống dựa vào tính atomic cỡ sector đó để xây atomicity ở quy mô lớn hơn. Ví dụ:
+dành riêng một sector ở đầu log để lưu vị trí của record cuối cùng hợp lệ; ghi log xong,
+fsync xong, mới cập nhật sector đó (và fsync tiếp). Cách này cho atomicity cho toàn bộ
+log, nhưng tốn **hai lần fsync** mỗi lần ghi — mà fsync là thứ đắt nhất.
+
+Có cách khác không cần đảm bảo gì từ phần cứng, cũng không cần hai lần fsync.
+
+### Checksum: phát hiện ghi dở
+
+Giả sử ghi log không atomic. Nhưng nếu **phát hiện được** record ghi dở thì chỉ cần bỏ qua
+nó là xong. Record duy nhất bị ảnh hưởng là cái nằm sau lần fsync thành công cuối cùng.
+
+Checksum làm được việc đó. Nó là một hàm băm: dữ liệu khác nhau thì gần như chắc chắn cho
+giá trị khác nhau. Lưu checksum kèm mỗi record, lúc đọc tính lại rồi đối chiếu — không
+khớp nghĩa là record không toàn vẹn.
+
+mydb dùng `crc32.ChecksumIEEE()` của thư viện chuẩn, đặt ở **đầu** record và phủ toàn bộ
+phần còn lại:
+
+```
+|  crc32  | key size | val size | deleted | key data | val data |
+| 4 bytes | 4 bytes  | 4 bytes  | 1 byte  |   ...    |   ...    |
+```
+
+`TestDecodeDetectsFlippedBit` lật thử một bit ở **từng byte** của record và đòi hỏi lần
+nào cũng bị từ chối.
+
+Vì sao dùng crc32 mà không phải sha256 hay md5? Hàm băm mật mã cũng làm được, nhưng không
+có lý do gì để dùng: hàm checksum chuyên dụng cho kết quả ngắn hơn và chạy nhanh hơn nhiều.
+Kể cả cách đơn giản như tổng số nguyên 16-bit của TCP/IP cũng đủ dùng — chỉ cần lưu ý
+trường hợp toàn byte 0 thì checksum không được ra 0, và crc32 không dính vấn đề đó.
+
+### Xử lý record dở lúc replay
+
+`Log.Read` phân loại lỗi từ `Entry.Decode` rồi quyết định:
+
+| Lỗi | Xử lý | Vì sao |
+|---|---|---|
+| `io.EOF` | `eof = true` | hết log bình thường |
+| `io.ErrUnexpectedEOF` | `eof = true`, cắt đuôi | record ghi dở |
+| `ErrBadSum` | `eof = true`, cắt đuôi | record không toàn vẹn |
+| `ErrCorruptEntry` | trả lỗi | dữ liệu nguyên vẹn nhưng vô nghĩa — không phải ghi dở |
+
+Bỏ qua record dở là **an toàn** chứ không phải làm ngơ: lần ghi đó chưa bao giờ trả về
+thành công cho người gọi, nên theo định nghĩa durability ở trên, ta chưa hứa gì về nó cả.
+Ngược lại, mọi record đã trả về thành công đều đã fsync xong và nằm trước nó.
+
+### Bắt buộc phải cắt đuôi file
+
+Phát hiện record dở thôi chưa đủ — phải **xóa nó khỏi file**, và đây là chỗ dễ bỏ sót nhất.
+
+Sau lần đọc thất bại, con trỏ file đang nằm giữa đống rác. Nếu cứ thế mà `Write`, record
+mới sẽ nằm *sau* đống rác đó. Lần khởi động kế tiếp: replay chạy tới đống rác, thấy hỏng,
+coi như hết log — và **mất trắng mọi record ghi sau lần khôi phục**, lặng lẽ, không báo gì.
+
+Nên `Log.Read` cắt file về đúng cuối record hợp lệ cuối cùng rồi mới báo eof:
+
+```go
+func (l *Log) truncateTail() error {
+	if err := l.fp.Truncate(l.offset); err != nil {
+		return err
+	}
+	if _, err := l.fp.Seek(l.offset, io.SeekStart); err != nil {
+		return err
+	}
+	return l.fp.Sync()
+}
+```
+
+`TestLogWriteAfterTornTailRecovery` và `TestOpenRecoversFromTornWrite` canh đúng kịch bản
+này: hỏng đuôi → khôi phục → ghi tiếp → khởi động lại → dữ liệu mới vẫn còn.
+
+### Cái checksum không làm được
+
+Checksum cũng bắt được lỗi phần cứng, kiểu bit bị lật do đĩa hoặc RAM lỗi. Nhưng đó
+**không phải** mục đích của nó trong database, vì database không khôi phục được loại mất
+mát đó — nó chỉ báo cho ta biết dữ liệu đã hỏng.
+
+Và có một câu hỏi không có lời đáp: làm sao biết record hỏng có phải là record cuối cùng
+hay không? **Không có cách nào**, vì trường size của chính record đó cũng có thể sai, nên
+không thể biết record kế tiếp bắt đầu ở đâu. Hệ quả: một record hỏng ở **giữa** log làm
+mất luôn mọi record đứng sau nó. `TestOpenStopsAtDamageInTheMiddle` ghi nhận đúng hành vi đó.
+
 ## `KV`
 
 ```go
@@ -221,13 +330,23 @@ khác nhau — một loại bug chỉ lộ ra sau khi restart.
 Đọc (`Get`) không đi qua `kv.mu`, mà dùng thẳng `RWMutex` bên trong `store` — nhiều
 goroutine đọc song song vẫn thoải mái.
 
+## Tóm lại
+
+Ba mảnh ghép — **log + checksum + fsync** — cho database khôi phục được sau khi mất điện
+và không đánh mất những lần ghi đã báo thành công. Đó là chức năng cốt lõi của một database.
+
+Đây cũng là lý do người ta nhúng SQLite vào ứng dụng di động thay vì ghi thẳng JSON ra
+file: không chỉ để truy vấn cho tiện, mà vì thao tác file thông thường **không** đảm bảo
+được durability và atomicity.
+
+Hiện mydb mới chỉ có log. Khi thêm cấu trúc dữ liệu vào, atomicity và durability — chữ A
+và D của ACID — sẽ phải tính lại từ đầu.
+
 ## Giới hạn hiện tại
 
-- **Log cắt cụt làm chết hẳn `Open`.** Mất điện giữa lúc ghi để lại một record dở ở cuối
-  file, lần khởi động sau `Open` trả lỗi và database không lên được nữa. Đây là lỗ hổng
-  nghiêm trọng nhất hiện tại: sự cố *chắc chắn* sẽ xảy ra, mà cách xử lý lại là chết hẳn.
-  Cách làm đúng là nhận ra record dở ở cuối, cắt file về ranh giới record tốt cuối cùng
-  rồi chạy tiếp — chỉ an toàn khi đã có checksum để phân biệt "dở dang" với "hỏng thật".
+- **Hỏng ở giữa log làm mất mọi thứ phía sau.** Không tránh được với format hiện tại, như
+  đã nói ở trên. Muốn khá hơn thì cần chia log thành block cố định để tìm lại được ranh
+  giới record kế tiếp — cách LevelDB và Kafka làm.
 - **fsync mỗi record nên ghi rất chậm** — khoảng 2.900 ghi/giây, so với 246.000 nếu không
   fsync. Chưa có chế độ gộp nhiều record vào một lần fsync, cũng chưa có tùy chọn cho phép
   người dùng chấp nhận mất vài giây dữ liệu để đổi lấy tốc độ.
