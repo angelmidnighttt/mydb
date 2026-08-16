@@ -14,6 +14,10 @@ import (
 type Log struct {
 	FileName string
 	fp       *os.File
+
+	// offset is the end of the last intact record, which is where a torn tail
+	// gets cut back to.
+	offset int64
 }
 
 // Open opens the log file, creating it if it does not exist.
@@ -57,20 +61,60 @@ func (l *Log) Write(ent *Entry) error {
 	if _, err := l.fp.Write(ent.Encode()); err != nil {
 		return err
 	}
-	return l.fp.Sync()
+	if err := l.fp.Sync(); err != nil {
+		return err
+	}
+
+	l.offset += int64(ent.Size())
+	return nil
 }
 
-// Read decodes the next entry. eof is true once the log is exhausted at a
-// record boundary, which is the normal way to end a replay loop.
+// Read decodes the next entry. eof is true once the log is exhausted, which is
+// the normal way to end a replay loop.
 //
-// A record that stops halfway is reported as an error, not as eof: the log is
-// damaged and pretending otherwise would silently drop data.
+// A record left half-written by a crash also ends the log: it was never
+// acknowledged to anyone, so dropping it loses nothing that was promised. Read
+// cuts the file back to the last intact record before reporting eof, so the
+// next Write appends to good data instead of to garbage.
 func (l *Log) Read(ent *Entry) (eof bool, err error) {
 	err = ent.Decode(l.fp)
-	if errors.Is(err, io.EOF) {
+
+	switch {
+	case err == nil:
+		l.offset += int64(ent.Size())
+		return false, nil
+
+	case errors.Is(err, io.EOF):
 		return true, nil
+
+	case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, ErrBadSum):
+		if err := l.truncateTail(); err != nil {
+			return false, err
+		}
+		return true, nil
+
+	default:
+		// ErrCorruptEntry and anything else: the bytes are intact but make no
+		// sense, so this is not a torn write and must not be papered over.
+		return false, err
 	}
-	return false, err
+}
+
+// truncateTail drops everything after the last intact record and puts the write
+// cursor there.
+//
+// Without the seek, the cursor would still sit wherever the failed read stopped,
+// and the next Write would land past the garbage. The next replay would then hit
+// that garbage, stop early, and silently lose every record written after the
+// crash.
+func (l *Log) truncateTail() error {
+	if err := l.fp.Truncate(l.offset); err != nil {
+		return err
+	}
+	if _, err := l.fp.Seek(l.offset, io.SeekStart); err != nil {
+		return err
+	}
+	return l.fp.Sync()
 }
 
 // Sync flushes the operating system's buffers to the physical disk. Write does
