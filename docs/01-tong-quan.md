@@ -38,6 +38,20 @@ make help    # xem tất cả target
 Xem thêm `make cover` (báo cáo coverage dạng HTML) và `make test-race`
 (cần CGO và một trình biên dịch C; hiện chưa chạy được trên máy dev vì thiếu gcc).
 
+## CI
+
+`.github/workflows/ci.yml` chạy vet + test trên Ubuntu, macOS và Windows mỗi lần push.
+
+Nó tồn tại vì hai đoạn code không thể kiểm chứng trên máy dev Windows:
+
+- **`syncDir`** — bản Unix (fsync thư mục cha) luôn là hàm rỗng trên Windows, nên chỉ
+  Ubuntu và macOS mới thật sự chạy nó. Xem [04](04-write-ahead-log.md#fsync-cả-thư-mục-cha).
+- **`-race`** — race detector cần CGO và một trình biên dịch C, máy dev không có gcc.
+  Hai runner Unix chạy thay.
+
+Code không bao giờ được chạy thì hỏng lúc nào không hay, mà cả hai chỗ này lại nằm đúng
+phần khó nhất: đồng thời và durability.
+
 ## Đã có gì
 
 | Phần | Trạng thái |

@@ -1,5 +1,7 @@
 # mydb
 
+[![CI](https://github.com/angelmidnighttt/mydb/actions/workflows/ci.yml/badge.svg)](https://github.com/angelmidnighttt/mydb/actions/workflows/ci.yml)
+
 Một key-value store viết từ đầu bằng Go, làm để học cách một database hoạt động bên dưới.
 
 **Trạng thái:** đã có phần lõi của một database — log + checksum + fsync. Ghi thành công

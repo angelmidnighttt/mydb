@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    # Windows is where this is developed, so it has to stay green. Linux and
+    # macOS are here for what Windows cannot check: syncDir is a no-op outside
+    # Unix, and the race detector needs a C compiler that the dev machine lacks.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false # no dependencies, so there is nothing to cache
+
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: vet
+        run: go vet ./...
+
+      - name: test
+        run: go test ./...
+
+      # Skipped on Windows: -race needs cgo and a C compiler. The two Unix
+      # runners cover it, and `make test-race` covers it locally once a
+      # toolchain such as MinGW-w64 is installed.
+      - name: test with race detector
+        if: runner.os != 'Windows'
+        run: go test -race ./...
