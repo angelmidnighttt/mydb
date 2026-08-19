@@ -21,7 +21,7 @@ mydb/
     ├── wal/                   # [03] định dạng record  [04] file log append-only
     ├── kv/                    # [04] ghép log với store: ghi log trước, replay khi mở
     ├── table/                 # [05] cell có kiểu  [06] schema, row, CRUD
-    └── sql/                   # [07] tokenizer: cắt câu lệnh thành token
+    └── sql/                   # [07] tokenizer: token và giá trị
 ```
 
 `internal/` là quy ước của Go: package nằm trong đó chỉ import được từ trong chính module
@@ -65,7 +65,7 @@ phần khó nhất: đồng thời và durability.
 | Checksum + khôi phục sau khi mất điện | xong — [04](04-write-ahead-log.md#ghi-dở-torn-write) |
 | Kiểu dữ liệu cho tầng quan hệ (`int64`, `[]byte`) | xong — [05](05-data-types.md) |
 | Hàng, schema, CRUD theo khóa chính | xong — [06](06-crud.md) |
-| Tokenizer cho SQL | mới cắt được tên và keyword — [07](07-tokenizer.md) |
+| Tokenizer cho SQL | tên, keyword, số, chuỗi — [07](07-tokenizer.md) |
 | Server + giao thức để client kết nối | chưa |
 | Compaction, on-disk format, index | chưa |
 

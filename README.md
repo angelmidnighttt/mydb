@@ -21,7 +21,7 @@ mydb/
     ├── wal/                   # định dạng record + file log append-only
     ├── kv/                    # ghép log với store: ghi log trước, replay khi mở
     ├── table/                 # tầng quan hệ: cell, schema, row, CRUD theo khóa chính
-    └── sql/                   # tầng SQL: cắt câu lệnh thành token (đang làm)
+    └── sql/                   # tầng SQL: token, giá trị (đang làm)
 ```
 
 ## Chạy thử

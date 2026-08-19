@@ -12,7 +12,11 @@
 // tokens together into a statement comes after; this file only splits.
 package sql
 
-import "strings"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // Parser is a cursor over one SQL statement: the text, and how far into it the
 // parse has got.
@@ -90,4 +94,17 @@ func (p *Parser) tryKeyword(kw string) bool {
 
 	p.pos = end
 	return true
+}
+
+// ErrSyntax reports text that is not the SQL the parser expected. Everything
+// this package turns away is that one problem, so callers get one sentinel to
+// test for, and the message carries the detail: where, and what was expected.
+var ErrSyntax = errors.New("sql: syntax error")
+
+// errorf builds a syntax error pointing at pos, a byte offset into the
+// statement. An offset is what a caller needs to underline the spot; line and
+// column can be counted out of it, and only matter once there is somewhere to
+// print them.
+func (p *Parser) errorf(pos int, format string, args ...any) error {
+	return fmt.Errorf("%w at %d: %s", ErrSyntax, pos, fmt.Sprintf(format, args...))
 }

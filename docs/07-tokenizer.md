@@ -26,10 +26,10 @@ tạo thành. SQL có bốn nhóm token:
 |---|---|---|
 | Keyword | `select`, `from`, `where` | xong — `tryKeyword` |
 | Tên (bảng, cột) | `t`, `a`, `_x9` | xong — `tryName` |
+| Số, chuỗi | `1`, `-7`, `'abc'` | xong — `parseInt`, `parseString` |
 | Ký hiệu | `=` `,` `;` `(` `)` | chưa |
-| Số, chuỗi | `1`, `abc` | chưa |
 
-Mỗi nhóm có luật riêng nên mỗi nhóm một hàm. Bước này làm hai nhóm đầu.
+Mỗi nhóm có luật riêng nên mỗi nhóm một hàm.
 
 ## `Parser` là một con trỏ, không phải một mảng token
 
@@ -41,13 +41,13 @@ type Parser struct {
 ```
 
 Không có bước trung gian "cắt cả câu thành `[]Token` rồi mới phân tích". Chuỗi giữ nguyên,
-chỉ có `pos` chạy trên nó. Mọi hàm `tryX` đều đọc từ `pos`, và **chỉ dời `pos` khi khớp**.
+chỉ có `pos` chạy trên nó. Mọi hàm đều đọc từ `pos`, và **chỉ dời `pos` khi thành công**.
 
 Giao kèo đó là toàn bộ thiết kế của bước này:
 
 ```
-khớp     → trả về true, pos nhảy tới sau token
-không khớp → trả về false, pos y nguyên — kể cả space đã bỏ qua để nhìn trước
+được    → pos nhảy tới sau token
+không được → pos y nguyên — kể cả space đã bỏ qua để nhìn trước
 ```
 
 Vì sao "y nguyên" lại quan trọng: một ngữ pháp phần lớn là **danh sách các lựa chọn**. Ở
@@ -69,6 +69,18 @@ func (p *Parser) skipSpace() int {
 
 Dời con trỏ ngay khi bỏ qua space thì một lần thử hỏng vẫn ăn mất mấy khoảng trắng. Không
 sai kết quả, nhưng phá vỡ giao kèo — mà giao kèo còn nguyên vẹn thì mới dễ tin.
+
+### `try` khác `parse` ở chỗ nào
+
+| | Trả về | Nghĩa |
+|---|---|---|
+| `tryX` | `bool` | "chỗ này có phải X không?" — không phải cũng bình thường, thử cái khác |
+| `parseX` | `error` | "chỗ này **phải** là X" — không phải là lỗi cú pháp, phải báo cho người dùng |
+
+Tới lúc ngữ pháp gọi `parseValue` thì nó đã biết chắc chỗ đó là một giá trị; cái gì khác
+không còn là "một lựa chọn khác" nữa mà là câu lệnh viết sai. Cả hai loại vẫn giữ chung một
+giao kèo về `pos`, và với `parseX` nó thêm một tác dụng: **vị trí trong thông báo lỗi và vị
+trí con trỏ luôn khớp nhau**.
 
 ## Keyword phải kết thúc ở separator
 
@@ -138,17 +150,93 @@ Hệ quả thực dụng: ở vị trí nào ngữ pháp chờ một keyword th�
 không chạy được, không phải vì `select` không thể là tên bảng về mặt kỹ thuật, mà vì ngữ
 pháp không có cách nào biết nên hiểu nó theo nghĩa nào.
 
+## Giá trị: một byte quyết định đi đường nào
+
+```go
+ch := p.buf[pos]
+switch {
+case ch == '"' || ch == '\'':
+	return p.parseString(out)
+case isDigit(ch) || ch == '-' || ch == '+':
+	return p.parseInt(out)
+default:
+	return p.errorf(pos, "expect a value, found %q", ch)
+}
+```
+
+Nhìn **một byte** là biết gọi hàm nào. Không thử rồi quay lui, không cần nhìn xa hơn. Phần
+lớn ngôn ngữ lập trình được thiết kế để đọc được theo kiểu đó — mỗi chỗ rẽ chỉ cần nhìn
+trước một token là quyết được, người ta gọi là **LL(1)** — và chính vì vậy một parser viết
+tay mới ngắn được như thế này. Ngôn ngữ nào không có tính chất đó thì parser phải nhìn xa,
+phải quay lui, và dài ra rất nhanh.
+
+Kết quả đi thẳng vào `table.Cell` của [05](05-data-types.md): đây là chỗ tầng SQL chạm vào
+tầng quan hệ lần đầu.
+
+## `int64`
+
+Luật gốc rất gọn: `+` hoặc `-` tùy chọn, rồi chữ số. Ở đây thêm hai chỗ nghiêm hơn:
+
+**Số phải kết thúc ở separator.** `1a` bị từ chối chứ không đọc thành `1` rồi bỏ lại `a`.
+Cùng lý do với `selecting`: một lỗi gõ không được phép biến thành hai token đều hợp lệ.
+
+**Dấu chấm bị chặn riêng.** `.` vốn *là* separator, nên nếu không chặn thì `1.5` đọc trót
+lọt thành `1` và bỏ lại `.5` cho người sau — một giá trị **âm thầm mất phần thập phân**.
+Chưa có `float64` thì nói thẳng ra vẫn hơn là làm sai lặng lẽ.
+
+Còn tràn số thì để `strconv.ParseInt` lo. Cú pháp đã được kiểm trước khi gọi, nên lỗi duy
+nhất nó còn có thể trả về là "không vừa 64 bit":
+
+```
+9223372036854775808  →  sql: syntax error at 0: 9223372036854775808 does not fit in an int64
+```
+
+## Chuỗi
+
+- Mở bằng `"` hoặc `'`, và **đóng bằng đúng dấu đã mở nó**. Nhờ vậy loại nháy còn lại thành
+  chữ bình thường ở bên trong: `'say "hi"'` không cần escape gì cả.
+- `\` escape byte đứng ngay sau, và chỉ ba escape là hợp lệ: `\'`, `\"`, `\\`.
+
+### Vì sao `\n` bị từ chối chứ không thành chữ `n`
+
+Đây là chỗ đáng cân nhắc nhất của cả bước. Nếu hôm nay `\n` nghĩa là chữ `n`, ngày mai thêm
+escape thật vào thì `"a\nb"` **đổi nghĩa** — câu lệnh cũ vẫn chạy, vẫn không báo gì, chỉ ra
+kết quả khác. Từ chối ngay từ đầu khiến mọi escape thêm về sau đều là **thêm thuần túy**:
+cái gì đang chạy được thì vẫn chạy đúng như cũ, cái gì đang bị từ chối thì bắt đầu chạy.
+
+Nguyên tắc chung đằng sau: khi chưa chắc một cú pháp nên mang nghĩa gì, **cấm** nó dễ sửa
+hơn là gán đại cho nó một nghĩa.
+
+## Lỗi mang theo vị trí
+
+```
+  1a      →  sql: syntax error at 3: a number cannot run straight into 'a'
+  "abc    →  sql: syntax error at 2: the string opened here is never closed
+  *       →  sql: syntax error at 2: expect a value, found '*'
+```
+
+Offset trỏ vào **chỗ phải sửa**, không phải chỗ phát hiện ra. Với chuỗi không đóng, chỗ phải
+sửa là dấu nháy mở ở đầu; báo ở cuối câu thì người đọc biết là thiếu nháy nhưng không biết
+thiếu của cái nào.
+
+Người gọi chỉ cần một `errors.Is(err, ErrSyntax)` để phân biệt "câu lệnh viết sai" với
+"database có vấn đề" — cùng cách dùng sentinel như `ErrBadRow` hay `ErrBadMode` ở các tầng
+dưới. Chi tiết nằm trong message chứ không đẻ thêm kiểu lỗi.
+
 ## Giới hạn hiện tại
 
-- **Mới có 2 trong 4 nhóm token.** Chưa có ký hiệu (`=` `,` `;` `(` `)`), chưa có số, chưa
-  có chuỗi. `TestReadsTheWordsOfAStatement` cho thấy đúng chỗ tokenizer dừng lại hiện nay:
-  nó đọc trôi chảy tới dấu phẩy đầu tiên rồi tắc.
+- **Còn thiếu nhóm token cuối: ký hiệu.** `=` `,` `;` `(` `)` chưa có hàm nào đọc.
+  `TestReadsTheWordsOfAStatement` cho thấy đúng chỗ tokenizer tắc lại hôm nay: nó đọc trôi
+  chảy `select` → `a` rồi đứng trước dấu phẩy.
 - **Chưa có ngữ pháp.** Mới cắt được từ, chưa ghép được câu. Chưa có `StmtSelect`, chưa có
   gì nối xuống `table.DB`.
-- **Lỗi chưa có vị trí.** `tryX` chỉ trả `false`, không nói sai ở đâu và vì sao. Một câu
-  lệnh sai cú pháp cần báo được "dòng 1, cột 14: chờ tên bảng" — muốn vậy phải có một kiểu
-  lỗi mang theo `pos`, chứ `bool` thì không chở được gì.
+- **Mới có 3 escape.** `\n`, `\t`, `\xFF` và escape unicode đều bị từ chối — cố ý, xem phần trên.
+- **Chưa có `float64`, `null`, `bool`.** Ba thứ này thiếu ở tầng `Cell` từ
+  [05](05-data-types.md) nên tokenizer cũng không đọc được.
 - **Chưa có comment, chưa có tên trong dấu nháy.** `-- ghi chú` và `"my column"` đều chưa
-  đọc được.
+  đọc được. Chú ý chỗ chồng lấn: `"..."` hiện luôn là chuỗi, nên nếu sau này muốn nó là tên
+  cột theo chuẩn SQL thì phải chọn một trong hai.
 - **Tên chỉ nhận ASCII.** Đọc theo byte nên cột tên tiếng Việt không đặt được. Với keyword
   thì đó là điều đúng đắn, với tên bảng và tên cột thì là một giới hạn.
+- **Vị trí lỗi mới là offset byte.** Chưa quy ra dòng và cột, cũng chưa in ra được đoạn văn
+  bản có gạch chân — hai thứ cần khi câu lệnh dài hơn một dòng.
