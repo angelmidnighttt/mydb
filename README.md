@@ -6,7 +6,8 @@ Một key-value store viết từ đầu bằng Go, làm để học cách một
 
 **Trạng thái:** đã có phần lõi của một database — log + checksum + fsync — và tầng quan hệ
 ở mức CRUD theo khóa chính. Ghi thành công là chắc chắn không mất, kể cả khi mất điện.
-Chưa có index, chưa quét được bảng, chưa có network layer.
+Tầng SQL vừa bắt đầu: cắt được token, chưa có ngữ pháp. Chưa có index, chưa quét được
+bảng, chưa có network layer.
 
 ## Cấu trúc
 
@@ -19,7 +20,8 @@ mydb/
     ├── store/                 # KV trong RAM: map + RWMutex
     ├── wal/                   # định dạng record + file log append-only
     ├── kv/                    # ghép log với store: ghi log trước, replay khi mở
-    └── table/                 # tầng quan hệ: cell, schema, row, CRUD theo khóa chính
+    ├── table/                 # tầng quan hệ: cell, schema, row, CRUD theo khóa chính
+    └── sql/                   # tầng SQL: cắt câu lệnh thành token (đang làm)
 ```
 
 ## Chạy thử
@@ -41,10 +43,14 @@ make help    # xem tất cả target
 4. [Write-ahead log](docs/04-write-ahead-log.md) — `internal/wal` + `internal/kv`
 5. [Data types](docs/05-data-types.md) — `internal/table`
 6. [CRUD](docs/06-crud.md) — `internal/table` + `internal/kv`
+7. [Tokenizer](docs/07-tokenizer.md) — `internal/sql`
 
 ## Bước tiếp theo
 
-Đọc hàng theo thứ tự: quét toàn bảng, index, range query. Cả ba đều cần duyệt key có thứ
-tự, mà `store` hiện tại là một `map` — nên bước tiếp theo là B-tree, cùng với cách mã hóa
-key so sánh được bằng bytes. Sau đó là catalog để lưu schema xuống đĩa, rồi server + giao
-thức để client nói chuyện với db qua network thay vì chỉ gọi hàm trong cùng process.
+Làm nốt tokenizer — ký hiệu, số, chuỗi — rồi tới ngữ pháp: ghép token thành câu lệnh và
+chạy nó qua `table.DB`.
+
+Sau đó là đọc hàng theo thứ tự: quét toàn bảng, index, range query. Cả ba đều cần duyệt key
+có thứ tự, mà `store` hiện tại là một `map` — nên cần B-tree, cùng với cách mã hóa key so
+sánh được bằng bytes. Rồi catalog để lưu schema xuống đĩa, rồi server + giao thức để client
+nói chuyện với db qua network thay vì chỉ gọi hàm trong cùng process.

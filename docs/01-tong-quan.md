@@ -20,7 +20,8 @@ mydb/
     ├── store/                 # [02] KV trong RAM: map + RWMutex
     ├── wal/                   # [03] định dạng record  [04] file log append-only
     ├── kv/                    # [04] ghép log với store: ghi log trước, replay khi mở
-    └── table/                 # [05] cell có kiểu  [06] schema, row, CRUD
+    ├── table/                 # [05] cell có kiểu  [06] schema, row, CRUD
+    └── sql/                   # [07] tokenizer: cắt câu lệnh thành token
 ```
 
 `internal/` là quy ước của Go: package nằm trong đó chỉ import được từ trong chính module
@@ -64,6 +65,7 @@ phần khó nhất: đồng thời và durability.
 | Checksum + khôi phục sau khi mất điện | xong — [04](04-write-ahead-log.md#ghi-dở-torn-write) |
 | Kiểu dữ liệu cho tầng quan hệ (`int64`, `[]byte`) | xong — [05](05-data-types.md) |
 | Hàng, schema, CRUD theo khóa chính | xong — [06](06-crud.md) |
+| Tokenizer cho SQL | mới cắt được tên và keyword — [07](07-tokenizer.md) |
 | Server + giao thức để client kết nối | chưa |
 | Compaction, on-disk format, index | chưa |
 
@@ -72,23 +74,25 @@ khi mất điện vẫn giữ nguyên mọi lần ghi đã báo thành công.
 
 ## Lộ trình
 
-1. **Đọc hàng theo thứ tự.** Quét toàn bảng, index, range query, lọc kết quả — cả bốn
+1. **Ngữ pháp SQL.** [07](07-tokenizer.md) mới cắt được token; còn ghép chúng thành câu
+   lệnh và chạy qua `table.DB`. Đây là việc đang làm.
+2. **Đọc hàng theo thứ tự.** Quét toàn bảng, index, range query, lọc kết quả — cả bốn
    đều cần duyệt key theo thứ tự, mà `store` hiện tại là một `map`. Cần B-tree, và cần một
    cách mã hóa key so sánh được bằng bytes. Đây cũng là lúc bỏ giả định "toàn bộ dữ liệu
    vừa trong RAM": khi có cấu trúc dữ liệu trên đĩa thì atomicity và durability phải tính
    lại từ đầu — log một record là chuyện dễ, giữ nguyên tính nhất quán của cả một B-tree
    lại là chuyện khác.
-2. **Catalog.** Lưu định nghĩa bảng xuống đĩa, để database tự biết bảng nào có cột gì thay
+3. **Catalog.** Lưu định nghĩa bảng xuống đĩa, để database tự biết bảng nào có cột gì thay
    vì bắt người gọi truyền `*Schema` vào từng lệnh.
-3. **Compaction.** Log chỉ nối thêm nên nó phình mãi; key ghi đè 1000 lần thì có 1000 bản
+4. **Compaction.** Log chỉ nối thêm nên nó phình mãi; key ghi đè 1000 lần thì có 1000 bản
    ghi mà chỉ 1 bản còn giá trị. Cần dọn định kỳ.
-4. **Server + giao thức.** Cho client nói chuyện với db qua network, thay vì chỉ gọi hàm
+5. **Server + giao thức.** Cho client nói chuyện với db qua network, thay vì chỉ gọi hàm
    trong cùng process.
 
 ## Giới hạn hiện tại
 
 Phần durability đã xong, nhưng **chưa kết nối được từ bên ngoài** — vẫn phải gọi hàm
-trong cùng process, chưa có server. Đó là bước 4 của lộ trình.
+trong cùng process, chưa có server. Đó là bước 5 của lộ trình.
 
 Tốc độ ghi hiện rất thấp (~2.900 ghi/giây) vì fsync sau mỗi record. Đó là lựa chọn có chủ
 ý: an toàn trước, nhanh sau.
