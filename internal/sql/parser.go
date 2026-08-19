@@ -73,13 +73,31 @@ func (p *Parser) tryName() (string, bool) {
 	return p.buf[start:end], true
 }
 
-// tryKeyword matches kw at the cursor, after any spaces, ignoring case: SELECT,
-// select and SeLeCt are one word. kw is ASCII, which is all a keyword can be.
+// tryKeyword matches kws at the cursor, one after another, after any spaces.
+//
+// More than one word is what statements like CREATE TABLE and INSERT INTO are
+// named by, and they are matched all or nothing: a text that begins CREATE INDEX
+// leaves the cursor on the CREATE, so the next alternative sees the statement
+// from its start rather than from the middle of its name.
+func (p *Parser) tryKeyword(kws ...string) bool {
+	start := p.pos
+	for _, kw := range kws {
+		if !p.tryOneKeyword(kw) {
+			p.pos = start
+			return false
+		}
+	}
+	return true
+}
+
+// tryOneKeyword matches kw at the cursor, after any spaces, ignoring case:
+// SELECT, select and SeLeCt are one word. kw is ASCII, which is all a keyword
+// can be.
 //
 // The match has to end at a separator or at the end of the text. Without that,
 // select would be found at the front of selecting, and the parse would carry on
 // from ing as though it were the next token.
-func (p *Parser) tryKeyword(kw string) bool {
+func (p *Parser) tryOneKeyword(kw string) bool {
 	start := p.skipSpace()
 	end := start + len(kw)
 	if end > len(p.buf) {

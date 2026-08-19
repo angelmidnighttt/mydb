@@ -6,7 +6,7 @@ Một key-value store viết từ đầu bằng Go, làm để học cách một
 
 **Trạng thái:** đã có phần lõi của một database — log + checksum + fsync — và tầng quan hệ
 ở mức CRUD theo khóa chính. Ghi thành công là chắc chắn không mất, kể cả khi mất điện.
-Tầng SQL đọc được câu SELECT thành cấu trúc, nhưng chưa chạy nó. Chưa có index,
+Tầng SQL đọc được cả năm câu lệnh thành cấu trúc, nhưng chưa chạy chúng. Chưa có index,
 chưa quét được bảng, chưa có network layer.
 
 ## Cấu trúc
@@ -21,7 +21,7 @@ mydb/
     ├── wal/                   # định dạng record + file log append-only
     ├── kv/                    # ghép log với store: ghi log trước, replay khi mở
     ├── table/                 # tầng quan hệ: cell, schema, row, CRUD theo khóa chính
-    └── sql/                   # tầng SQL: token, giá trị, ngữ pháp SELECT
+    └── sql/                   # tầng SQL: token, giá trị, ngữ pháp cả 5 câu lệnh
 ```
 
 ## Chạy thử
@@ -45,14 +45,15 @@ make help    # xem tất cả target
 6. [CRUD](docs/06-crud.md) — `internal/table` + `internal/kv`
 7. [Tokenizer](docs/07-tokenizer.md) — `internal/sql`
 8. [Ngữ pháp: SELECT](docs/08-parse-select.md) — `internal/sql`
+9. [Bốn câu lệnh còn lại](docs/09-statements.md) — `internal/sql`
 
 ## Bước tiếp theo
 
-Nối `StmtSelect` xuống `table.DB`: ánh xạ tên cột trong câu lệnh sang vị trí cột trong
-schema, rồi chạy. Sau đó là ngữ pháp cho `insert`, `update`, `delete` — ba thao tác
-còn lại mà tầng bảng đã làm được từ [06](docs/06-crud.md).
+Chạy câu lệnh đã parse: đổi tên cột trong câu lệnh sang vị trí cột trong schema rồi gọi
+xuống `table.DB`. Việc đó cần một chỗ lưu schema — tức là cần catalog, một bảng nội bộ
+chứa định nghĩa của các bảng khác.
 
 Sau đó là đọc hàng theo thứ tự: quét toàn bảng, index, range query. Cả ba đều cần duyệt key
 có thứ tự, mà `store` hiện tại là một `map` — nên cần B-tree, cùng với cách mã hóa key so
-sánh được bằng bytes. Rồi catalog để lưu schema xuống đĩa, rồi server + giao thức để client
-nói chuyện với db qua network thay vì chỉ gọi hàm trong cùng process.
+sánh được bằng bytes. Rồi server + giao thức, để client nói chuyện với db qua network thay
+vì chỉ gọi hàm trong cùng process.

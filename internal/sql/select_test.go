@@ -2,33 +2,9 @@ package sql
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
-
-	"github.com/angelmidnighttt/mydb/internal/table"
 )
-
-// showCell renders a cell so a whole statement can be compared as one string,
-// which says more in a failure than a struct dump does.
-func showCell(cell table.Cell) string {
-	switch cell.Type {
-	case table.TypeI64:
-		return fmt.Sprintf("i64:%d", cell.I64)
-	case table.TypeStr:
-		return fmt.Sprintf("str:%s", cell.Str)
-	default:
-		return fmt.Sprintf("bad:%v", cell.Type)
-	}
-}
-
-func showKeys(keys []NamedCell) string {
-	parts := make([]string, len(keys))
-	for i, key := range keys {
-		parts[i] = key.column + "=" + showCell(key.value)
-	}
-	return strings.Join(parts, " and ")
-}
 
 func TestTryPunctuation(t *testing.T) {
 	tests := []struct {
@@ -165,19 +141,18 @@ func TestParseSelect(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewParser(tt.buf)
+			stmt, ok := parseOne(t, tt.buf).(*StmtSelect)
+			if !ok {
+				t.Fatalf("parseStmt(%q) is not a select", tt.buf)
+			}
 
-			var got StmtSelect
-			if err := p.parseSelect(&got); err != nil {
-				t.Fatalf("parseSelect(%q) error = %v", tt.buf, err)
+			if stmt.table != tt.wantTable {
+				t.Errorf("table = %q, want %q", stmt.table, tt.wantTable)
 			}
-			if got.table != tt.wantTable {
-				t.Errorf("table = %q, want %q", got.table, tt.wantTable)
-			}
-			if cols := strings.Join(got.cols, ","); cols != tt.wantCols {
+			if cols := strings.Join(stmt.cols, ","); cols != tt.wantCols {
 				t.Errorf("cols = %q, want %q", cols, tt.wantCols)
 			}
-			if keys := showKeys(got.keys); keys != tt.wantKeys {
+			if keys := showKeys(stmt.keys); keys != tt.wantKeys {
 				t.Errorf("keys = %q, want %q", keys, tt.wantKeys)
 			}
 		})
@@ -189,9 +164,6 @@ func TestParseSelectErrors(t *testing.T) {
 		name string
 		buf  string
 	}{
-		{"empty", ""},
-		{"no select", "a from t where c=1"},
-		{"select is only a prefix", "selecting a from t where c=1"},
 		{"no columns", "select from t where c=1"},
 		{"missing comma", "select a b from t where c=1"},
 		{"nothing after select", "select"},
@@ -212,27 +184,24 @@ func TestParseSelectErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewParser(tt.buf)
-
-			var got StmtSelect
-			if err := p.parseSelect(&got); !errors.Is(err, ErrSyntax) {
-				t.Fatalf("parseSelect(%q) error = %v, want ErrSyntax", tt.buf, err)
-			}
+			parseOneErr(t, tt.buf)
 		})
 	}
 }
 
 // Parsing into a struct that has been used before must not leave the columns of
-// the earlier statement in it.
+// the earlier statement in it. parseStmt hands over a fresh struct every time,
+// so this is about calling the statement parsers directly — the select itself is
+// already read by then, which is why the text below starts at the column list.
 func TestParseSelectDoesNotAccumulate(t *testing.T) {
 	var stmt StmtSelect
 
-	p := NewParser("select a,b from t where c=1")
+	p := NewParser("a,b from t where c=1")
 	if err := p.parseSelect(&stmt); err != nil {
 		t.Fatalf("first parseSelect() error = %v", err)
 	}
 
-	p = NewParser("select z from u where y=2")
+	p = NewParser("z from u where y=2")
 	if err := p.parseSelect(&stmt); err != nil {
 		t.Fatalf("second parseSelect() error = %v", err)
 	}
@@ -247,14 +216,13 @@ func TestParseSelectDoesNotAccumulate(t *testing.T) {
 
 // Where the parser stands today: it reads the statement and stops on the
 // semicolon, which no rule consumes. Whatever comes after it is not looked at,
-// so the statement-level entry point that comes later is what will have to
-// insist the text ends here.
-func TestParseSelectStopsAtTheSemicolon(t *testing.T) {
+// so an entry point above parseStmt is what will have to insist the text ends
+// here.
+func TestParseStmtStopsAtTheSemicolon(t *testing.T) {
 	p := NewParser("select a from t where b=2; and then some junk")
 
-	var stmt StmtSelect
-	if err := p.parseSelect(&stmt); err != nil {
-		t.Fatalf("parseSelect() error = %v", err)
+	if _, err := p.parseStmt(); err != nil {
+		t.Fatalf("parseStmt() error = %v", err)
 	}
 	if p.buf[p.pos] != ';' {
 		t.Fatalf("cursor sits on %q, want the semicolon", p.buf[p.pos])
@@ -265,11 +233,10 @@ func TestParseSelectStopsAtTheSemicolon(t *testing.T) {
 // up where a name belongs. The statement is still refused, but by the rule after
 // the one that was really broken.
 func TestKeywordsAreStillNames(t *testing.T) {
-	p := NewParser("select a from where c=1")
+	p := NewParser("a from where c=1")
 
 	var stmt StmtSelect
-	err := p.parseSelect(&stmt)
-	if !errors.Is(err, ErrSyntax) {
+	if err := p.parseSelect(&stmt); !errors.Is(err, ErrSyntax) {
 		t.Fatalf("parseSelect() error = %v, want ErrSyntax", err)
 	}
 	if stmt.table != "where" {
@@ -291,13 +258,8 @@ func TestParseSelectErrorPointsAtTheTrouble(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			p := NewParser(tt.buf)
+			err := parseOneErr(t, tt.buf)
 
-			var stmt StmtSelect
-			err := p.parseSelect(&stmt)
-			if err == nil {
-				t.Fatalf("parseSelect(%q) = nil, want an error", tt.buf)
-			}
 			if !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("error = %q, want it to say %q", err, tt.want)
 			}

@@ -97,6 +97,41 @@ func TestTryKeyword(t *testing.T) {
 	}
 }
 
+// The names of several statements are two words. Matching them is all or
+// nothing: a create that is not followed by table must give the create back, or
+// the alternative tried next starts from the middle of a name it never saw.
+func TestTryKeywordSequence(t *testing.T) {
+	tests := []struct {
+		buf     string
+		kws     []string
+		want    bool
+		wantPos int
+	}{
+		{"create table t", []string{"create", "table"}, true, 12},
+		{"CREATE   TABLE t", []string{"create", "table"}, true, 14},
+		{"insert into t", []string{"insert", "into"}, true, 11},
+		{"primary key(b)", []string{"primary", "key"}, true, 11},
+
+		{"create index i", []string{"create", "table"}, false, 0},
+		{"createtable t", []string{"create", "table"}, false, 0},
+		{"create", []string{"create", "table"}, false, 0},
+		{"table t", []string{"create", "table"}, false, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.buf, func(t *testing.T) {
+			p := NewParser(tt.buf)
+
+			if got := p.tryKeyword(tt.kws...); got != tt.want {
+				t.Fatalf("tryKeyword(%v) on %q = %v, want %v", tt.kws, tt.buf, got, tt.want)
+			}
+			if p.pos != tt.wantPos {
+				t.Errorf("pos = %d, want %d", p.pos, tt.wantPos)
+			}
+		})
+	}
+}
+
 // One statement read token by token, by hand. Which reader is called where is
 // the grammar's decision — this is what parseSelect does, with the decisions
 // written out instead of made by the shape of the code.

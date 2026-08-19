@@ -1,17 +1,16 @@
 package sql
 
-// parseSelect reads a whole SELECT statement into out. The one shape it accepts:
+// parseSelect reads a SELECT, from just after the keyword that named it:
 //
 //	select <column> [, <column>]... from <table> where <column> = <value> [and ...]
 //
-// Reading it is three lists in a row, and each list is read the same way: a part,
+// The select itself was read by parseStmt — that is what told it to come here —
+// so every parseX for a statement starts at the word after its own name.
+//
+// What is left is two lists in a row, and both are read the same way: a part,
 // then a separator, then another part, until the separator stops coming. That is
 // the whole trick of a hand-written parser — a grammar that looks big is a small
 // number of shapes, one calling the next.
-//
-// The leading keyword is what tells statements apart. Only SELECT exists today,
-// so it does no work yet; it is the byte of lookahead that INSERT and DELETE
-// will be told apart by, in the same way parseValue tells a string from a number.
 //
 // out is emptied first, so a struct parsed into twice does not keep the columns
 // of the first go.
@@ -22,10 +21,6 @@ package sql
 // stopped is where the reader has to look.
 func (p *Parser) parseSelect(out *StmtSelect) error {
 	*out = StmtSelect{}
-
-	if !p.tryKeyword("select") {
-		return p.errorf(p.skipSpace(), "expect select")
-	}
 
 	// The column list ends at from, so the keyword is what closes the loop. It
 	// has to be tried before the name: from is a name as far as tryName knows.
@@ -59,11 +54,12 @@ func (p *Parser) parseSelect(out *StmtSelect) error {
 //
 // It is the column list of parseSelect with two words changed — and in place of
 // the comma, an equality in place of a name — because both are the same shape:
-// one or more parts with a separator between them.
+// one or more parts with a separator between them. SELECT, UPDATE and DELETE all
+// end in this same clause, so all three call it.
 //
-// The clause is required. A SELECT without one asks for every row of the table,
-// and there is no way to walk a table yet; refusing it here says so at the point
-// where it was written, instead of at some later point where the reason is
+// The clause is required. Without one, a statement is about every row of the
+// table, and there is no way to walk a table yet; refusing it here says so at the
+// point where it was written, instead of at some later point where the reason is
 // harder to see.
 func (p *Parser) parseWhere(out *[]NamedCell) error {
 	if !p.tryKeyword("where") {
