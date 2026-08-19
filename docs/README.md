@@ -9,6 +9,7 @@
 | 03 | [Serialization](03-serialization.md) | `internal/wal` — mã hóa entry thành byte, `io.Reader`/`io.Writer` |
 | 04 | [Write-ahead log](04-write-ahead-log.md) | `internal/wal` + `internal/kv` — ghi xuống đĩa, fsync, checksum, khôi phục sau mất điện, update mode |
 | 05 | [Data types](05-data-types.md) | `internal/table` — cell có kiểu, little-endian, bù hai, mã hóa `int64` và `[]byte` |
+| 06 | [CRUD](06-crud.md) | `internal/table` + `internal/kv` — schema, row, khóa chính, ánh xạ SQL xuống KV |
 
 ## Quy ước
 

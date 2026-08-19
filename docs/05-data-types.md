@@ -191,11 +191,9 @@ trước khi cắt slice, nên không có gì để cấp phát quá tay.
 
 - **Mới có 2 kiểu.** Chưa có `float64`, `bool`, `null`, `time`. Kiểu `null` sẽ cần chỗ để
   ghi "ô này rỗng", điều format hiện tại chưa có chỗ chứa.
-- **Chưa có hàng, chưa có schema.** `Cell` đứng một mình; ghép cell thành hàng và mô tả
-  cột nào kiểu gì là việc của bước sau. Cho tới lúc đó, `Decode` vẫn phải được người gọi
-  gán kiểu bằng tay.
-- **Chưa nối vào KV.** Package `table` chưa gọi tới `internal/kv` dòng nào — mới là định
-  dạng, chưa có chỗ lưu.
+- **Hàng và schema đã có ở [06](06-crud.md)**, cùng với đường nối xuống KV. Riêng `Cell`
+  đứng một mình thì vẫn không tự mô tả: gọi thẳng `Cell.Decode` vẫn phải tự gán kiểu, chỉ
+  khác là từ 06 trở đi `Schema` làm việc đó thay người gọi.
 - **`[]byte` tối đa 4 GiB** vì length là `uint32`. `Encode` không kiểm tra ngưỡng này:
   chuỗi dài hơn sẽ bị `uint32()` cắt cụt âm thầm. Thực tế không chạm tới, nhưng vẫn là một
   chỗ chưa chặn.

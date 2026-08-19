@@ -2,6 +2,8 @@ package table_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/angelmidnighttt/mydb/internal/table"
 )
@@ -64,4 +66,56 @@ func ExampleCell_row() {
 	// [7 0 0 0 0 0 0 0 5 0 0 0 97 108 105 99 101]
 	// 0: 7 "", 9 bytes left
 	// 1: 0 "alice", 0 bytes left
+}
+
+// A table is a schema plus rows. The schema names the key columns, and every
+// operation addresses a row by them.
+func Example_crud() {
+	dir, err := os.MkdirTemp("", "mydb-example")
+	if err != nil {
+		fmt.Println("tempdir:", err)
+		return
+	}
+	defer os.RemoveAll(dir)
+
+	// create table users (id int64, name bytes, primary key (id))
+	schema := &table.Schema{
+		Name:  "users",
+		Cols:  []string{"id", "name"},
+		Types: []table.CellType{table.TypeI64, table.TypeStr},
+		PK:    []int{0},
+	}
+
+	db := &table.DB{}
+	db.KV.Path = filepath.Join(dir, "example.log")
+	if err := db.Open(); err != nil {
+		fmt.Println("open:", err)
+		return
+	}
+	defer db.Close()
+
+	row := table.Row{
+		{Type: table.TypeI64, I64: 7},
+		{Type: table.TypeStr, Str: []byte("alice")},
+	}
+	inserted, _ := db.Insert(schema, row)
+	fmt.Println("inserted:", inserted)
+
+	// The key is taken now, so a second insert is refused.
+	inserted, _ = db.Insert(schema, row)
+	fmt.Println("inserted again:", inserted)
+
+	// Select is handed a row with only the key filled in, and fills in the rest.
+	found := table.Row{{Type: table.TypeI64, I64: 7}, {}}
+	ok, _ := db.Select(schema, found)
+	fmt.Printf("found: %v, name = %s\n", ok, found[1].Str)
+
+	deleted, _ := db.Delete(schema, table.Row{{Type: table.TypeI64, I64: 7}, {}})
+	fmt.Println("deleted:", deleted)
+
+	// Output:
+	// inserted: true
+	// inserted again: false
+	// found: true, name = alice
+	// deleted: true
 }

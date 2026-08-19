@@ -3,6 +3,10 @@
 // where a value is just bytes, every cell has a data type — for now int64 or
 // []byte.
 //
+// A row is addressed by its primary key: DB puts the key columns into the KV
+// key and the rest into the KV value, so one row is one KV pair. Schema is what
+// says which column is which.
+//
 // A cell is serialized as its value alone:
 //
 //	int64   | value   |
