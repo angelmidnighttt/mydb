@@ -141,8 +141,7 @@ thêm một kiểu dữ liệu, và giữ cho tầng bảng không phải biết
 
 ## Giới hạn hiện tại
 
-- **Parse xong nhưng chưa chạy.** Chưa có gì nối `StmtSelect` xuống `table.DB`. Đó là bước
-  kế tiếp, và nó cần một chỗ ánh xạ tên cột sang vị trí cột.
+- **Chạy được từ [10](10-exec.md).** Chỗ nối tên cột sang vị trí cột nằm ở đó.
 - **`where` bắt buộc, và chỉ có `=` nối bằng `and`.** Không có `>`, `<`, `or`, `not`, `in`,
   `like`, không có ngoặc. `where` không được phép vắng mặt vì thiếu nó là quét cả bảng, mà
   quét bảng thì chưa có.

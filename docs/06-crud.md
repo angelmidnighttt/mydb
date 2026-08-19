@@ -48,7 +48,8 @@ dung — vì lý do quen thuộc ở [03](03-serialization.md#vì-sao-size-phả
 
 Cách này tốn chỗ: tên bảng lặp lại trong **mọi** key của bảng đó. DB thật gán cho mỗi bảng
 một số nguyên 4 byte lấy từ **catalog** (một bảng nội bộ chứa định nghĩa của các bảng khác)
-và dùng số đó làm prefix. mydb chưa có catalog nên tạm dùng tên.
+và dùng số đó làm prefix. mydb có catalog từ [10](10-exec.md) nhưng chưa cấp số cho bảng,
+nên key vẫn mang cả cái tên.
 
 ## `Schema`
 
@@ -138,10 +139,10 @@ Giá trị `bool` trả về mang đúng nghĩa của `SetEx`, kể cả chỗ g
 
 ## Giới hạn hiện tại
 
-- **Schema chưa được lưu ở đâu cả.** Người gọi phải truyền `*Schema` vào từng lệnh, và
-  không có gì trên đĩa nói bảng `t` gồm những cột nào. Mở lại database bằng một schema khác
-  thì mọi hàng cũ giải mã ra rác — không lỗi, chỉ sai. Lời giải là một **catalog**: bảng nội
-  bộ lưu định nghĩa của các bảng khác, chính nó cũng là một bảng bình thường.
+- **Schema được lưu từ [10](10-exec.md)** — một **catalog** dưới key `@schema_` + tên bảng.
+  Các thao tác hàng ở đây vẫn nhận `*Schema` từ người gọi chứ không tự tra, và đó là cố ý:
+  một hàng đọc hay ghi được bằng bất cứ schema nào, kể cả schema catalog chưa từng nghe tới.
+  Catalog đó vẫn chưa phải một bảng thật, nên chưa truy vấn được bằng SQL.
 - **Chỉ truy cập được bằng primary key.** Chưa có quét toàn bảng, chưa có index, chưa có
   range query, chưa có filter. Cả bốn thứ đó đều cần **duyệt key theo thứ tự**, mà `store`
   hiện tại là một `map` — không có thứ tự nào cả. Đây là chỗ B-tree bước vào.

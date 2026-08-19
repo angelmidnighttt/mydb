@@ -13,6 +13,7 @@
 | 07 | [Tokenizer](07-tokenizer.md) | `internal/sql` — cắt câu lệnh SQL thành token: tên, keyword, số, chuỗi |
 | 08 | [Ngữ pháp: SELECT](08-parse-select.md) | `internal/sql` — ghép token thành `StmtSelect`, dấu câu, mệnh đề WHERE |
 | 09 | [Bốn câu lệnh còn lại](09-statements.md) | `internal/sql` — `parseStmt`, create table, insert, update, delete |
+| 10 | [Chạy câu lệnh](10-exec.md) | `internal/sql` + `internal/table` — catalog, `Exec`, tên cột thành vị trí cột |
 
 ## Quy ước
 

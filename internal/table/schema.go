@@ -63,6 +63,15 @@ func (schema *Schema) check() error {
 		if typ != TypeI64 && typ != TypeStr {
 			return fmt.Errorf("%w: column %q has type %v", ErrBadSchema, schema.Cols[i], typ)
 		}
+		// Two columns of one name cannot both be addressed: a statement naming
+		// that column would always mean the first, and the second could only
+		// ever be written by position.
+		for _, earlier := range schema.Cols[:i] {
+			if earlier == schema.Cols[i] {
+				return fmt.Errorf("%w: table %q has two columns named %q",
+					ErrBadSchema, schema.Name, schema.Cols[i])
+			}
+		}
 	}
 
 	if len(schema.PK) == 0 {

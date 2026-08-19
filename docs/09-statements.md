@@ -160,9 +160,8 @@ nhánh. Ngôn ngữ có sum type (Rust `enum`, TypeScript union) thì compiler b
 
 ## Giới hạn hiện tại
 
-- **Parse xong vẫn chưa chạy.** Đây là giới hạn lớn nhất còn lại: chưa có gì nối các
-  `Stmt*` xuống `table.DB`. Việc đó cần một chỗ đổi **tên cột** sang **vị trí cột**, tức là
-  cần biết schema — và cần chỗ lưu schema, tức là cần catalog.
+- **Chạy được từ [10](10-exec.md)**, chỗ đổi tên cột sang vị trí cột và chỗ lưu schema đều
+  ở đó.
 - **Dấu `;` vẫn chưa ai ăn**, và `parseStmt` không kiểm tra chuỗi đã hết. Cần một hàm cấp
   trên nữa: nuốt `;`, đòi hết chuỗi, và về sau là đọc nhiều câu lệnh trong một chuỗi.
 - **`insert` không có danh sách cột.** `insert into t (a, b) values (1, 2)` chưa viết được;
@@ -171,8 +170,9 @@ nhánh. Ngôn ngữ có sum type (Rust `enum`, TypeScript union) thì compiler b
   [08](08-parse-select.md#giới-hạn-hiện-tại).
 - **Chưa có `drop table`, `alter table`, `create index`.** Thêm một nhánh vào `parseStmt` là
   xong phần nhận diện — phần khó nằm ở tầng dưới.
-- **Không kiểm trùng lặp.** `create table t (a int64, a string, ...)` parse trót lọt, và
-  `update t set a=1, a=2` cũng vậy.
+- **Không kiểm trùng lặp.** `create table t (a int64, a string, ...)` parse trót lọt và bị
+  `Schema.check` chặn lúc chạy ([10](10-exec.md)); còn `update t set a=1, a=2` thì không ai
+  chặn, giá trị viết sau thắng.
 - **Kiểu trong SQL gọi là `string`, trong `Cell` gọi là `bytes`.** Cùng một thứ, hai cái
   tên; test in ra `b bytes` cho cột khai báo `b string`. Chưa đáng sửa, nhưng đáng biết.
 - **`StmtCreatTable` được đổi thành `StmtCreateTable`** so với đề bài — chỗ đó là lỗi gõ,

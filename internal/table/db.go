@@ -1,6 +1,10 @@
 package table
 
-import "github.com/angelmidnighttt/mydb/internal/kv"
+import (
+	"sync"
+
+	"github.com/angelmidnighttt/mydb/internal/kv"
+)
 
 // DB is a relational database: rows addressed by primary key, kept in the
 // key-value store underneath. One row is one KV pair — the key columns encoded
@@ -8,15 +12,28 @@ import "github.com/angelmidnighttt/mydb/internal/kv"
 //
 // The zero value is not usable; set KV.Path and call Open.
 //
-// A schema is passed to every call rather than registered once. Nothing on disk
-// records what the tables are yet, so the caller is the only thing that knows,
-// and the caller has to say each time.
+// The row operations take the schema they work against, rather than looking it
+// up. The database does know its tables — CreateTable writes them down and
+// GetSchema reads them back — but keeping the two apart means a row can be read
+// or written by anything holding a schema, whether the catalog has heard of it
+// or not, which is what the tests of those operations rely on.
 type DB struct {
 	KV kv.KV
+
+	// mu guards tables, which is a cache in front of the catalog rather than
+	// state of its own: everything in it is also in the store.
+	mu     sync.RWMutex
+	tables map[string]*Schema
 }
 
 // Open opens the underlying store, replaying its log.
-func (db *DB) Open() error { return db.KV.Open() }
+func (db *DB) Open() error {
+	if err := db.KV.Open(); err != nil {
+		return err
+	}
+	db.tables = make(map[string]*Schema)
+	return nil
+}
 
 // Close closes the underlying store.
 func (db *DB) Close() error { return db.KV.Close() }
