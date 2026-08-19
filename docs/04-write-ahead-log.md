@@ -320,6 +320,63 @@ xử lý hơn nhiều.
 key có thật để mà xóa. Xóa một key không tồn tại thì **không ghi gì cả** — tombstone cho
 một key chưa từng được set không mang thông tin gì, chỉ làm log to thêm.
 
+### Update mode: insert, update hay upsert
+
+`Set` ghi bất kể key đã có hay chưa — đúng nghĩa **upsert** của SQL. Nhưng SQL còn phân
+biệt `INSERT` (chỉ thêm mới) với `UPDATE` (chỉ sửa cái đã có), nên KV phải nói được cả ba:
+
+```go
+type UpdateMode int
+
+const (
+	ModeUpsert UpdateMode = 0 // thêm mới hoặc ghi đè
+	ModeInsert UpdateMode = 1 // chỉ thêm key mới
+	ModeUpdate UpdateMode = 2 // chỉ sửa key đã có
+)
+
+func (kv *KV) SetEx(key []byte, val []byte, mode UpdateMode) (bool, error)
+```
+
+`Set` bây giờ chỉ là `SetEx(key, val, ModeUpsert)`. Vẫn một đường ghi duy nhất; mode chỉ
+thêm một cửa kiểm tra ở đầu đường đó.
+
+Vì sao là hàm của `KV` chứ không phải tiện ích viết bên ngoài? Vì người gọi tự làm
+
+```go
+if _, ok := db.Get(key); !ok {
+	db.Set(key, val)     // sai: có khe hở giữa hai lời gọi
+}
+```
+
+thì giữa `Get` và `Set` có một khe: goroutine khác chen vào đúng lúc đó, cả hai cùng thấy
+key chưa tồn tại và cùng ghi. `SetEx` kiểm tra và ghi **trong cùng một lần giữ `kv.mu`**,
+nên không có khe nào để chen.
+
+Bị từ chối thì **không ghi gì cả** — cùng lý do với xóa một key không tồn tại: không có
+thay đổi nào để mà ghi lại. Nếu vẫn ghi record, replay lúc khởi động sẽ thực hiện lại
+đúng cái lệnh vừa bị từ chối, và lần này không còn ai kiểm tra nữa.
+
+#### Một bool cho ba mode
+
+| Mode | Key đã có | Key chưa có |
+|---|---|---|
+| `ModeUpsert` | ghi đè → `true` | thêm mới → `false` |
+| `ModeInsert` | từ chối → `false` | thêm mới → `true` |
+| `ModeUpdate` | ghi đè → `true` | từ chối → `false` |
+
+Đọc theo cột thì thấy ngay chỗ gợn: với `ModeInsert` và `ModeUpdate`, `true` nghĩa là
+**lệnh ghi đã chạy**; với `ModeUpsert`, lệnh ghi *luôn* chạy nên bool không còn gì để báo,
+và nó giữ nghĩa cũ của `Set` — **đã ghi đè lên giá trị có sẵn**.
+
+Một bool không đủ chỗ cho hai câu hỏi khác nhau ("có ghi không" và "có đè lên cái gì
+không"). Ở đây chọn giữ nguyên chữ ký `Set` cũ, vì đổi nó sẽ đổi luôn ý nghĩa của một API
+đã có người gọi. Cách sạch hơn là trả về hai giá trị — `added` và `updated` — như B-tree
+của cuốn sách gốc làm; để dành cho lúc nào cần biết cả hai.
+
+`SetEx` với mode lạ trả `ErrBadMode` chứ không panic: chỗ này có sẵn ô `error` để trả lời,
+khác `Cell.Encode` ở [05](05-data-types.md) — nơi chữ ký không có chỗ nào đặt lỗi nên chỉ
+còn cách panic.
+
 ### Khóa
 
 `kv.mu` giữ cho thứ tự record trong log khớp với thứ tự thay đổi trong memory. Nếu hai
@@ -344,6 +401,9 @@ và D của ACID — sẽ phải tính lại từ đầu.
 
 ## Giới hạn hiện tại
 
+- **`SetEx` trả về một bool mang hai nghĩa.** Với `ModeInsert` và `ModeUpdate` nó là "có
+  ghi hay không", với `ModeUpsert` là "có đè lên giá trị cũ hay không". Muốn hết mập mờ
+  thì phải tách thành hai giá trị trả về.
 - **Hỏng ở giữa log làm mất mọi thứ phía sau.** Không tránh được với format hiện tại, như
   đã nói ở trên. Muốn khá hơn thì cần chia log thành block cố định để tìm lại được ranh
   giới record kế tiếp — cách LevelDB và Kafka làm.

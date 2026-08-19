@@ -4,6 +4,8 @@
 package kv
 
 import (
+	"errors"
+	"fmt"
 	"sync"
 
 	"github.com/angelmidnighttt/mydb/internal/store"
@@ -77,16 +79,84 @@ func (kv *KV) Get(key []byte) (val []byte, ok bool) {
 	return kv.mem.Get(string(key))
 }
 
-// Set stores val under key. updated reports whether the key already had a
-// value, that is, whether this overwrote something rather than inserting.
+// UpdateMode says what SetEx does about a key that is — or is not — already
+// there. The three modes are SQL's upsert, INSERT and UPDATE, all landing on
+// the same write path.
+//
+// The zero value is ModeUpsert: a caller that leaves the mode out gets the
+// permissive behaviour of Set rather than an error.
+type UpdateMode int
+
+const (
+	// ModeUpsert writes either way: insert a new key, overwrite an old one.
+	ModeUpsert UpdateMode = 0
+	// ModeInsert writes only a new key; an existing one is left as it was.
+	ModeInsert UpdateMode = 1
+	// ModeUpdate writes only over an existing key; an absent one is not created.
+	ModeUpdate UpdateMode = 2
+)
+
+// String renders the mode for error messages.
+func (mode UpdateMode) String() string {
+	switch mode {
+	case ModeUpsert:
+		return "upsert"
+	case ModeInsert:
+		return "insert"
+	case ModeUpdate:
+		return "update"
+	default:
+		return fmt.Sprintf("UpdateMode(%d)", int(mode))
+	}
+}
+
+// ErrBadMode reports a mode that is none of the three. It is a bug in the
+// caller, not something wrong with the key, the value or the log.
+var ErrBadMode = errors.New("kv: unknown update mode")
+
+// SetEx stores val under key, subject to mode.
+//
+// The bool answers the question the mode asks:
+//
+//	ModeInsert   inserted — false means the key was already there
+//	ModeUpdate   updated  — false means the key was absent
+//	ModeUpsert   updated  — true means the write overwrote a value
+//
+// The two restricted modes can refuse to write, and their bool reports whether
+// the write went through. ModeUpsert never refuses, so it has no failure to
+// report and its bool keeps the older meaning instead.
+//
+// A refused write touches neither the log nor memory, for the same reason
+// deleting an absent key writes nothing: it changes no state, so a record of it
+// would only grow the log.
 //
 // The record reaches the log before memory changes: if the write fails, the
 // database is left exactly as it was.
-func (kv *KV) Set(key []byte, val []byte) (updated bool, err error) {
+func (kv *KV) SetEx(key []byte, val []byte, mode UpdateMode) (bool, error) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	updated = kv.mem.Has(string(key))
+	exists := kv.mem.Has(string(key))
+
+	// What the bool reports depends on the mode, so it is settled here, beside
+	// the check that decided it, rather than after the write.
+	var ok bool
+	switch mode {
+	case ModeUpsert:
+		ok = exists
+	case ModeInsert:
+		if exists {
+			return false, nil
+		}
+		ok = true
+	case ModeUpdate:
+		if !exists {
+			return false, nil
+		}
+		ok = true
+	default:
+		return false, fmt.Errorf("%w: %v", ErrBadMode, mode)
+	}
 
 	ent := wal.Entry{Key: key, Val: val}
 	if err := kv.log.Write(&ent); err != nil {
@@ -94,7 +164,14 @@ func (kv *KV) Set(key []byte, val []byte) (updated bool, err error) {
 	}
 	kv.apply(&ent)
 
-	return updated, nil
+	return ok, nil
+}
+
+// Set stores val under key, inserting it or overwriting what was there. updated
+// reports whether the key already had a value, that is, whether this overwrote
+// something rather than inserting.
+func (kv *KV) Set(key []byte, val []byte) (updated bool, err error) {
+	return kv.SetEx(key, val, ModeUpsert)
 }
 
 // Del removes key. deleted reports whether the key was there to begin with.

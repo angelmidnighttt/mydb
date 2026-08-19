@@ -2,6 +2,8 @@ package kv
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,6 +36,28 @@ func mustGet(t *testing.T, db *KV, key string) (string, bool) {
 
 	val, ok := db.Get([]byte(key))
 	return string(val), ok
+}
+
+func mustSetEx(t *testing.T, db *KV, key, val string, mode UpdateMode) bool {
+	t.Helper()
+
+	ok, err := db.SetEx([]byte(key), []byte(val), mode)
+	if err != nil {
+		t.Fatalf("SetEx(%q, %v) error = %v", key, mode, err)
+	}
+	return ok
+}
+
+// logSize reports how large the log file has grown, for the tests that check a
+// call wrote nothing.
+func logSize(t *testing.T, path string) int64 {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	return info.Size()
 }
 
 func TestOpenCreatesEmptyDatabase(t *testing.T) {
@@ -70,6 +94,102 @@ func TestSetReportsUpdated(t *testing.T) {
 	}
 	if updated := mustSet(t, db, "k", "v2"); !updated {
 		t.Fatal("second Set() = inserted, want updated")
+	}
+}
+
+// The whole truth table of SetEx: what each mode does to a key that is already
+// there, and to one that is not. wantVal is empty when the key must stay
+// absent; the log may only grow when the value actually changed to "new".
+func TestSetExModes(t *testing.T) {
+	tests := []struct {
+		mode    UpdateMode
+		exists  bool
+		want    bool
+		wantVal string
+	}{
+		{ModeUpsert, false, false, "new"}, // inserted, nothing was overwritten
+		{ModeUpsert, true, true, "new"},   // overwrote
+		{ModeInsert, false, true, "new"},  // inserted
+		{ModeInsert, true, false, "old"},  // refused: the key was taken
+		{ModeUpdate, false, false, ""},    // refused: nothing to update
+		{ModeUpdate, true, true, "new"},   // updated
+	}
+
+	for _, tt := range tests {
+		state := "absent"
+		if tt.exists {
+			state = "existing"
+		}
+		t.Run(fmt.Sprintf("%v/%s", tt.mode, state), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "test.log")
+			db := openKV(t, path)
+			if tt.exists {
+				mustSet(t, db, "k", "old")
+			}
+			before := logSize(t, path)
+
+			if got := mustSetEx(t, db, "k", "new", tt.mode); got != tt.want {
+				t.Errorf("SetEx() = %v, want %v", got, tt.want)
+			}
+
+			got, ok := mustGet(t, db, "k")
+			switch {
+			case tt.wantVal == "":
+				if ok {
+					t.Errorf("Get(k) = %q, want absent", got)
+				}
+			case !ok || got != tt.wantVal:
+				t.Errorf("Get(k) = %q, %v; want %q, true", got, ok, tt.wantVal)
+			}
+
+			// A refused write changed nothing, so there is nothing to record —
+			// the same rule that keeps a no-op delete out of the log.
+			wrote, wantWrote := logSize(t, path) > before, tt.wantVal == "new"
+			if wrote != wantWrote {
+				t.Errorf("log grew = %v, want %v", wrote, wantWrote)
+			}
+		})
+	}
+}
+
+// The refusal has to hold after a restart too: if a refused write had reached
+// the log, replay would carry it out.
+func TestSetExRefusalsSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+
+	db := openKV(t, path)
+	mustSet(t, db, "k", "v1")
+	mustSetEx(t, db, "k", "v2", ModeInsert)     // refused: k is taken
+	mustSetEx(t, db, "absent", "x", ModeUpdate) // refused: absent is not there
+	db.Close()
+
+	reopened := openKV(t, path)
+	if got, _ := mustGet(t, reopened, "k"); got != "v1" {
+		t.Errorf("Get(k) after restart = %q, want \"v1\" — a refused insert reached the log", got)
+	}
+	if _, ok := mustGet(t, reopened, "absent"); ok {
+		t.Error("a refused update created the key, visible after restart")
+	}
+}
+
+// An unknown mode is a bug in the caller, not bad data, so it is reported and
+// nothing is written.
+func TestSetExRejectsUnknownMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.log")
+	db := openKV(t, path)
+
+	ok, err := db.SetEx([]byte("k"), []byte("v"), UpdateMode(7))
+	if !errors.Is(err, ErrBadMode) {
+		t.Fatalf("SetEx(mode 7) error = %v, want ErrBadMode", err)
+	}
+	if ok {
+		t.Error("SetEx(mode 7) = true, want false")
+	}
+	if _, found := mustGet(t, db, "k"); found {
+		t.Error("an invalid mode wrote the key anyway")
+	}
+	if size := logSize(t, path); size != 0 {
+		t.Errorf("log grew to %d bytes on an invalid mode", size)
 	}
 }
 

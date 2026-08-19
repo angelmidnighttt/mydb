@@ -7,7 +7,7 @@
 | 01 | [Tổng quan](01-tong-quan.md) | mydb là gì, cấu trúc thư mục, cách chạy, lộ trình |
 | 02 | [In-memory store](02-in-memory-store.md) | `internal/store` — KV trong RAM, API và các quyết định thiết kế |
 | 03 | [Serialization](03-serialization.md) | `internal/wal` — mã hóa entry thành byte, `io.Reader`/`io.Writer` |
-| 04 | [Write-ahead log](04-write-ahead-log.md) | `internal/wal` + `internal/kv` — ghi xuống đĩa, fsync, checksum, khôi phục sau mất điện |
+| 04 | [Write-ahead log](04-write-ahead-log.md) | `internal/wal` + `internal/kv` — ghi xuống đĩa, fsync, checksum, khôi phục sau mất điện, update mode |
 | 05 | [Data types](05-data-types.md) | `internal/table` — cell có kiểu, little-endian, bù hai, mã hóa `int64` và `[]byte` |
 
 ## Quy ước
