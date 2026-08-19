@@ -27,7 +27,7 @@ tạo thành. SQL có bốn nhóm token:
 | Keyword | `select`, `from`, `where` | xong — `tryKeyword` |
 | Tên (bảng, cột) | `t`, `a`, `_x9` | xong — `tryName` |
 | Số, chuỗi | `1`, `-7`, `'abc'` | xong — `parseInt`, `parseString` |
-| Ký hiệu | `=` `,` `;` `(` `)` | chưa |
+| Ký hiệu | `=` `,` `;` `(` `)` | xong — `tryPunctuation` |
 
 Mỗi nhóm có luật riêng nên mỗi nhóm một hàm.
 
@@ -225,12 +225,10 @@ dưới. Chi tiết nằm trong message chứ không đẻ thêm kiểu lỗi.
 
 ## Giới hạn hiện tại
 
-- **Còn thiếu nhóm token cuối: ký hiệu.** `=` `,` `;` `(` `)` chưa có hàm nào đọc.
-  `TestReadsTheWordsOfAStatement` cho thấy đúng chỗ tokenizer tắc lại hôm nay: nó đọc trôi
-  chảy `select` → `a` rồi đứng trước dấu phẩy.
-- **Chưa có ngữ pháp.** Mới cắt được từ, chưa ghép được câu. Chưa có `StmtSelect`, chưa có
-  gì nối xuống `table.DB`.
-- **Mới có 3 escape.** `\n`, `\t`, `\xFF` và escape unicode đều bị từ chối — cố ý, xem phần trên.
+- **Cắt token xong, ghép câu là chuyện của [08](08-parse-select.md).** Bốn nhóm token đã
+  đủ; `StmtSelect` và ngữ pháp nằm ở bước sau.
+- **Mới có 3 escape.** `\n`, `\t`, `\xFF` và escape unicode đều bị từ chối —
+  cố ý, xem phần trên.
 - **Chưa có `float64`, `null`, `bool`.** Ba thứ này thiếu ở tầng `Cell` từ
   [05](05-data-types.md) nên tokenizer cũng không đọc được.
 - **Chưa có comment, chưa có tên trong dấu nháy.** `-- ghi chú` và `"my column"` đều chưa

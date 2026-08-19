@@ -1,6 +1,10 @@
 package sql
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/angelmidnighttt/mydb/internal/table"
+)
 
 func TestTryName(t *testing.T) {
 	tests := []struct {
@@ -93,9 +97,10 @@ func TestTryKeyword(t *testing.T) {
 	}
 }
 
-// Where the tokenizer stands today: it reads the words of a statement and stops
-// at the first symbol, because symbols do not have a function yet.
-func TestReadsTheWordsOfAStatement(t *testing.T) {
+// One statement read token by token, by hand. Which reader is called where is
+// the grammar's decision — this is what parseSelect does, with the decisions
+// written out instead of made by the shape of the code.
+func TestReadsTheTokensOfAStatement(t *testing.T) {
 	p := NewParser("select a,b from t where c=1;")
 
 	if !p.tryKeyword("select") {
@@ -105,9 +110,8 @@ func TestReadsTheWordsOfAStatement(t *testing.T) {
 		t.Fatalf("tryName() = %q, %v; want \"a\", true", got, ok)
 	}
 
-	// The comma is next. Nothing here can consume it, so both tries fail and the
-	// cursor stays put — which is exactly what a caller needs to see to know it
-	// has to handle the symbol itself.
+	// The comma is next, and a word reader cannot take it: both tries fail and
+	// the cursor stays put, which is how a caller knows a symbol is what is due.
 	if got, ok := p.tryName(); ok {
 		t.Fatalf("tryName() at a comma = %q, want no name", got)
 	}
@@ -118,8 +122,9 @@ func TestReadsTheWordsOfAStatement(t *testing.T) {
 		t.Fatalf("cursor sits on %q, want a comma", p.buf[p.pos])
 	}
 
-	// Step over it by hand and the words carry on.
-	p.pos++
+	if !p.tryPunctuation(",") {
+		t.Fatal("tryPunctuation(,) = false")
+	}
 	if got, ok := p.tryName(); !ok || got != "b" {
 		t.Fatalf("tryName() = %q, %v; want \"b\", true", got, ok)
 	}
@@ -135,8 +140,22 @@ func TestReadsTheWordsOfAStatement(t *testing.T) {
 	if got, ok := p.tryName(); !ok || got != "c" {
 		t.Fatalf("tryName() = %q, %v; want \"c\", true", got, ok)
 	}
-	if p.buf[p.pos] != '=' {
-		t.Fatalf("cursor sits on %q, want an equals sign", p.buf[p.pos])
+	if !p.tryPunctuation("=") {
+		t.Fatal("tryPunctuation(=) = false")
+	}
+
+	var value table.Cell
+	if err := p.parseValue(&value); err != nil {
+		t.Fatalf("parseValue() error = %v", err)
+	}
+	if value.Type != table.TypeI64 || value.I64 != 1 {
+		t.Fatalf("parseValue() = %v %d, want int64 1", value.Type, value.I64)
+	}
+
+	// Every token of the statement is read; only the semicolon is left, and
+	// nothing at this level claims it.
+	if p.buf[p.pos:] != ";" {
+		t.Fatalf("%q left over, want only the semicolon", p.buf[p.pos:])
 	}
 }
 

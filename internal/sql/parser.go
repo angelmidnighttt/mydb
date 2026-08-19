@@ -108,3 +108,24 @@ var ErrSyntax = errors.New("sql: syntax error")
 func (p *Parser) errorf(pos int, format string, args ...any) error {
 	return fmt.Errorf("%w at %d: %s", ErrSyntax, pos, fmt.Sprintf(format, args...))
 }
+
+// tryPunctuation matches punct at the cursor, after any spaces.
+//
+// It needs neither of the two rules tryKeyword needs. Case does not apply, and
+// nothing has to follow: punctuation is made of bytes that cannot appear inside
+// a name or a number, so it always ends where it ends. 1,2 needs no space to be
+// three tokens.
+//
+// punct is compared as a whole, so an operator of more than one byte works —
+// but a shorter one that is a prefix of a longer one will match first, so when
+// >= arrives it has to be tried before >.
+func (p *Parser) tryPunctuation(punct string) bool {
+	start := p.skipSpace()
+	end := start + len(punct)
+	if end > len(p.buf) || p.buf[start:end] != punct {
+		return false
+	}
+
+	p.pos = end
+	return true
+}

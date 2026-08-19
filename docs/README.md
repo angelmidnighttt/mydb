@@ -11,6 +11,7 @@
 | 05 | [Data types](05-data-types.md) | `internal/table` — cell có kiểu, little-endian, bù hai, mã hóa `int64` và `[]byte` |
 | 06 | [CRUD](06-crud.md) | `internal/table` + `internal/kv` — schema, row, khóa chính, ánh xạ SQL xuống KV |
 | 07 | [Tokenizer](07-tokenizer.md) | `internal/sql` — cắt câu lệnh SQL thành token: tên, keyword, số, chuỗi |
+| 08 | [Ngữ pháp: SELECT](08-parse-select.md) | `internal/sql` — ghép token thành `StmtSelect`, dấu câu, mệnh đề WHERE |
 
 ## Quy ước
 

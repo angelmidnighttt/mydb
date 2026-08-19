@@ -21,7 +21,7 @@ mydb/
     ├── wal/                   # [03] định dạng record  [04] file log append-only
     ├── kv/                    # [04] ghép log với store: ghi log trước, replay khi mở
     ├── table/                 # [05] cell có kiểu  [06] schema, row, CRUD
-    └── sql/                   # [07] tokenizer: token và giá trị
+    └── sql/                   # [07] tokenizer  [08] ngữ pháp SELECT
 ```
 
 `internal/` là quy ước của Go: package nằm trong đó chỉ import được từ trong chính module
@@ -65,7 +65,8 @@ phần khó nhất: đồng thời và durability.
 | Checksum + khôi phục sau khi mất điện | xong — [04](04-write-ahead-log.md#ghi-dở-torn-write) |
 | Kiểu dữ liệu cho tầng quan hệ (`int64`, `[]byte`) | xong — [05](05-data-types.md) |
 | Hàng, schema, CRUD theo khóa chính | xong — [06](06-crud.md) |
-| Tokenizer cho SQL | tên, keyword, số, chuỗi — [07](07-tokenizer.md) |
+| Tokenizer cho SQL | xong — [07](07-tokenizer.md) |
+| Ngữ pháp SELECT | đọc thành cấu trúc, chưa chạy — [08](08-parse-select.md) |
 | Server + giao thức để client kết nối | chưa |
 | Compaction, on-disk format, index | chưa |
 
@@ -74,8 +75,9 @@ khi mất điện vẫn giữ nguyên mọi lần ghi đã báo thành công.
 
 ## Lộ trình
 
-1. **Ngữ pháp SQL.** [07](07-tokenizer.md) mới cắt được token; còn ghép chúng thành câu
-   lệnh và chạy qua `table.DB`. Đây là việc đang làm.
+1. **Chạy câu lệnh SQL.** [08](08-parse-select.md) đã đọc `select` thành `StmtSelect`;
+   còn ánh xạ tên cột sang vị trí cột rồi gọi xuống `table.DB`, và còn ngữ pháp cho
+   `insert`, `update`, `delete`. Đây là việc đang làm.
 2. **Đọc hàng theo thứ tự.** Quét toàn bảng, index, range query, lọc kết quả — cả bốn
    đều cần duyệt key theo thứ tự, mà `store` hiện tại là một `map`. Cần B-tree, và cần một
    cách mã hóa key so sánh được bằng bytes. Đây cũng là lúc bỏ giả định "toàn bộ dữ liệu
