@@ -19,7 +19,8 @@ mydb/
 └── internal/
     ├── store/                 # [02] KV trong RAM: map + RWMutex
     ├── wal/                   # [03] định dạng record  [04] file log append-only
-    └── kv/                    # [04] ghép log với store: ghi log trước, replay khi mở
+    ├── kv/                    # [04] ghép log với store: ghi log trước, replay khi mở
+    └── table/                 # [05] tầng quan hệ: cell có kiểu và cách mã hóa
 ```
 
 `internal/` là quy ước của Go: package nằm trong đó chỉ import được từ trong chính module
@@ -61,6 +62,8 @@ phần khó nhất: đồng thời và durability.
 | Ghi log xuống đĩa, replay khi khởi động | xong — [04](04-write-ahead-log.md) |
 | fsync: ghi thành công là chắc chắn không mất | xong — [04](04-write-ahead-log.md#đảm-bảo-dữ-liệu-thật-sự-xuống-đĩa) |
 | Checksum + khôi phục sau khi mất điện | xong — [04](04-write-ahead-log.md#ghi-dở-torn-write) |
+| Kiểu dữ liệu cho tầng quan hệ (`int64`, `[]byte`) | xong — [05](05-data-types.md) |
+| Hàng, schema, bảng | chưa |
 | Server + giao thức để client kết nối | chưa |
 | Compaction, on-disk format, index | chưa |
 

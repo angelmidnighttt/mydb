@@ -17,7 +17,8 @@ mydb/
 └── internal/
     ├── store/                 # KV trong RAM: map + RWMutex
     ├── wal/                   # định dạng record + file log append-only
-    └── kv/                    # ghép log với store: ghi log trước, replay khi mở
+    ├── kv/                    # ghép log với store: ghi log trước, replay khi mở
+    └── table/                 # tầng quan hệ: cell có kiểu (int64, []byte)
 ```
 
 ## Chạy thử
@@ -37,8 +38,10 @@ make help    # xem tất cả target
 2. [In-memory store](docs/02-in-memory-store.md) — `internal/store`
 3. [Serialization](docs/03-serialization.md) — `internal/wal`
 4. [Write-ahead log](docs/04-write-ahead-log.md) — `internal/wal` + `internal/kv`
+5. [Data types](docs/05-data-types.md) — `internal/table`
 
 ## Bước tiếp theo
 
-Server + giao thức, để client nói chuyện với db qua network thay vì chỉ gọi hàm trong
-cùng process.
+Ghép nhiều cell thành một hàng và định nghĩa schema cho bảng — tiếp tục dựng tầng quan hệ
+trên nền KV. Sau đó là server + giao thức, để client nói chuyện với db qua network thay vì
+chỉ gọi hàm trong cùng process.
