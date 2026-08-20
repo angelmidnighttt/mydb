@@ -68,15 +68,15 @@ func (kv *KV) replay() error {
 // record into a change, so replay and live writes cannot drift apart.
 func (kv *KV) apply(ent *wal.Entry) {
 	if ent.Deleted {
-		kv.mem.Delete(string(ent.Key))
+		kv.mem.Delete(ent.Key)
 		return
 	}
-	kv.mem.Set(string(ent.Key), ent.Val)
+	kv.mem.Set(ent.Key, ent.Val)
 }
 
 // Get returns the value stored under key. ok is false if the key is absent.
 func (kv *KV) Get(key []byte) (val []byte, ok bool) {
-	return kv.mem.Get(string(key))
+	return kv.mem.Get(key)
 }
 
 // UpdateMode says what SetEx does about a key that is — or is not — already
@@ -136,7 +136,7 @@ func (kv *KV) SetEx(key []byte, val []byte, mode UpdateMode) (bool, error) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	exists := kv.mem.Has(string(key))
+	exists := kv.mem.Has(key)
 
 	// What the bool reports depends on the mode, so it is settled here, beside
 	// the check that decided it, rather than after the write.
@@ -182,7 +182,7 @@ func (kv *KV) Del(key []byte) (deleted bool, err error) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	if !kv.mem.Has(string(key)) {
+	if !kv.mem.Has(key) {
 		return false, nil
 	}
 

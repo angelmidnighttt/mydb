@@ -14,6 +14,7 @@
 | 08 | [Ngữ pháp: SELECT](08-parse-select.md) | `internal/sql` — ghép token thành `StmtSelect`, dấu câu, mệnh đề WHERE |
 | 09 | [Bốn câu lệnh còn lại](09-statements.md) | `internal/sql` — `parseStmt`, create table, insert, update, delete |
 | 10 | [Chạy câu lệnh](10-exec.md) | `internal/sql` + `internal/table` — catalog, `Exec`, tên cột thành vị trí cột |
+| 11 | [Mảng sắp xếp](11-sorted-store.md) | `internal/store` — binary search, map thành mảng có thứ tự |
 
 ## Quy ước
 

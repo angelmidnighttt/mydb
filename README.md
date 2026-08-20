@@ -17,7 +17,7 @@ mydb/
 ├── Makefile                   # build / test / run
 ├── docs/                      # tài liệu, đọc theo thứ tự số
 └── internal/
-    ├── store/                 # KV trong RAM: map + RWMutex
+    ├── store/                 # KV trong RAM: mảng sắp xếp + binary search
     ├── wal/                   # định dạng record + file log append-only
     ├── kv/                    # ghép log với store: ghi log trước, replay khi mở
     ├── table/                 # tầng quan hệ: cell, schema, row, CRUD, catalog
@@ -47,14 +47,17 @@ make help    # xem tất cả target
 8. [Ngữ pháp: SELECT](docs/08-parse-select.md) — `internal/sql`
 9. [Bốn câu lệnh còn lại](docs/09-statements.md) — `internal/sql`
 10. [Chạy câu lệnh](docs/10-exec.md) — `internal/sql` + `internal/table`
+11. [Mảng sắp xếp](docs/11-sorted-store.md) — `internal/store`
 
 ## Bước tiếp theo
 
-Một cửa vào nhận chuỗi: `Parse(text)` để ngoài package chạy được SQL, kèm quyết định về
-dấu `;` và việc bắt buộc "hết chuỗi ở đây". Sau đó `main.go` mới demo được bằng SQL thay vì
-bằng lời gọi KV.
+Mã hóa key **so sánh được bằng bytes** — big-endian cộng lật bit dấu cho `int64`, escape
+cộng terminator cho chuỗi — kèm `Row.DecodeKey`. [11](docs/11-sorted-store.md) đã sắp xếp
+bộ nhớ, nhưng key hiện tại sắp ra sai thứ tự nên range query chưa nói tới được.
 
-Sau đó là đọc hàng theo thứ tự: quét toàn bảng, index, range query. Cả ba đều cần duyệt key
-có thứ tự, mà `store` hiện tại là một `map` — nên cần B-tree, cùng với cách mã hóa key so
-sánh được bằng bytes. Rồi server + giao thức, để client nói chuyện với db qua network thay
-vì chỉ gọi hàm trong cùng process.
+Rồi API duyệt (`Seek`/`Next`) ở tầng store, `Scan` ở tầng bảng, và ngữ pháp `> < order by`.
+Song song đó vẫn còn thiếu `Parse(text)` để ngoài package chạy được SQL.
+
+Xa hơn: LSM-tree để bỏ giả định "toàn bộ dữ liệu vừa trong RAM" — mảng sắp xếp vừa dựng
+chính là hình dạng nó lớn lên thành. Rồi server + giao thức, để client nói chuyện với db
+qua network thay vì chỉ gọi hàm trong cùng process.

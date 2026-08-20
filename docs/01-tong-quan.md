@@ -17,7 +17,7 @@ mydb/
 ├── Makefile                   # build / test / run
 ├── docs/                      # tài liệu, đọc theo thứ tự số
 └── internal/
-    ├── store/                 # [02] KV trong RAM: map + RWMutex
+    ├── store/                 # [02] KV trong RAM  [11] mảng sắp xếp
     ├── wal/                   # [03] định dạng record  [04] file log append-only
     ├── kv/                    # [04] ghép log với store: ghi log trước, replay khi mở
     ├── table/                 # [05] cell  [06] schema, row, CRUD  [10] catalog
@@ -59,6 +59,7 @@ phần khó nhất: đồng thời và durability.
 | Phần | Trạng thái |
 |---|---|
 | KV in-memory, an toàn đa luồng | xong — [02](02-in-memory-store.md) |
+| Bộ nhớ có thứ tự (binary search) | xong — [11](11-sorted-store.md) |
 | Serialize entry thành byte | xong — [03](03-serialization.md) |
 | Ghi log xuống đĩa, replay khi khởi động | xong — [04](04-write-ahead-log.md) |
 | fsync: ghi thành công là chắc chắn không mất | xong — [04](04-write-ahead-log.md#đảm-bảo-dữ-liệu-thật-sự-xuống-đĩa) |
@@ -76,17 +77,18 @@ khi mất điện vẫn giữ nguyên mọi lần ghi đã báo thành công.
 
 ## Lộ trình
 
-1. **Một cửa vào nhận chuỗi.** [10](10-exec.md) chạy được câu lệnh đã parse, nhưng từ ngoài
+1. **Đọc hàng theo thứ tự.** Quét toàn bảng, index, range query, lọc kết quả. Bộ nhớ đã có
+   thứ tự từ [11](11-sorted-store.md); còn thiếu ba mảnh: mã hóa key so sánh được bằng
+   bytes (kèm `Row.DecodeKey`), API duyệt `Seek`/`Next`, và ngữ pháp `> < order by`. Đây là
+   việc đang làm.
+2. **Một cửa vào nhận chuỗi.** [10](10-exec.md) chạy được câu lệnh đã parse, nhưng từ ngoài
    package chưa ai parse được: còn thiếu `Parse(text)`, và cùng với nó là quyết định về dấu
-   `;` cùng việc đòi hết chuỗi. Đây là việc đang làm.
-2. **Đọc hàng theo thứ tự.** Quét toàn bảng, index, range query, lọc kết quả — cả bốn
-   đều cần duyệt key theo thứ tự, mà `store` hiện tại là một `map`. Cần B-tree, và cần một
-   cách mã hóa key so sánh được bằng bytes. Đây cũng là lúc bỏ giả định "toàn bộ dữ liệu
-   vừa trong RAM": khi có cấu trúc dữ liệu trên đĩa thì atomicity và durability phải tính
-   lại từ đầu — log một record là chuyện dễ, giữ nguyên tính nhất quán của cả một B-tree
-   lại là chuyện khác.
-3. **Compaction.** Log chỉ nối thêm nên nó phình mãi; key ghi đè 1000 lần thì có 1000 bản
-   ghi mà chỉ 1 bản còn giá trị. Cần dọn định kỳ.
+   `;` cùng việc đòi hết chuỗi.
+3. **LSM-tree.** Bỏ giả định "toàn bộ dữ liệu vừa trong RAM". Mảng sắp xếp ở
+   [11](11-sorted-store.md) chính là hình dạng nó lớn lên thành. Kèm theo là compaction:
+   log chỉ nối thêm nên nó phình mãi, key ghi đè 1000 lần thì có 1000 bản ghi mà chỉ 1 bản
+   còn giá trị. Và khi có cấu trúc dữ liệu trên đĩa thì atomicity với durability phải tính
+   lại từ đầu — log một record là chuyện dễ, giữ cho cả một cây nhất quán là chuyện khác.
 4. **Server + giao thức.** Cho client nói chuyện với db qua network, thay vì chỉ gọi hàm
    trong cùng process.
 

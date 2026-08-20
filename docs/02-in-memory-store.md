@@ -2,6 +2,12 @@
 
 Package: [`internal/store`](../internal/store/store.go)
 
+> **Cập nhật ở [11](11-sorted-store.md):** `map` bên trong đã được thay bằng hai mảng
+> sắp xếp cộng binary search, và key đổi từ `string` sang `[]byte`. Mọi quyết định thiết
+> kế bên dưới vẫn còn nguyên giá trị — copy hai chiều, `RWMutex`, `[]byte` cho value —
+> chỉ có cấu trúc dữ liệu bên dưới là khác. Chỗ nào nói "map" thì đọc là "cái đã từng là
+> map".
+
 ## Mục tiêu
 
 Lớp lưu trữ đơn giản nhất có thể: giữ key-value trong RAM, cho nhiều goroutine dùng chung
@@ -26,7 +32,7 @@ v, ok := s.Get("hello")   // []byte("world"), true
 | `Set(key, value)` | — | ghi đè nếu key đã có; value được **copy** khi lưu |
 | `Delete(key)` | `bool` | `true` nếu key có tồn tại trước khi xóa |
 | `Len()` | `int` | số key hiện tại |
-| `Keys()` | `[]string` | tất cả key, **thứ tự không xác định** |
+| `Keys()` | `[]string` | tất cả key, **theo thứ tự** kể từ [11](11-sorted-store.md) |
 
 Mọi method đều an toàn khi gọi từ nhiều goroutine.
 
@@ -77,7 +83,8 @@ không. Đây là ràng buộc của ngôn ngữ, không phải lựa chọn.
   khởi động do [`internal/kv`](04-write-ahead-log.md) lo, bằng cách ghi log rồi replay
   vào chính store này.
 - **Chỉ chạy trong một process.** Chưa có server.
-- Chưa có TTL/expire, chưa có transaction, chưa có range scan (map không có thứ tự).
+- Chưa có TTL/expire, chưa có transaction. Range scan thì cấu trúc đã sẵn sàng từ
+  [11](11-sorted-store.md), nhưng chưa có API để duyệt.
 - `Keys()` giữ read lock trong lúc copy toàn bộ danh sách key — với vài triệu key thì
   mỗi lần gọi sẽ chặn writer một khoảng đáng kể.
 - **Không giới hạn bộ nhớ.** Ghi tới đâu RAM ăn tới đó, không có eviction. Client ghi đủ
